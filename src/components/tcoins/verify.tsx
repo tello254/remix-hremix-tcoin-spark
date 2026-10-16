@@ -92,9 +92,9 @@ export function TaskDialog({ task, close }: { task: Campaign | null; close: () =
         const r = await verifyFn({ data: { platform: task.platform as 'YouTube' | 'TikTok', url: task.url, handle, code: code.trim(), expectedCode: task.accessCode } });
         if (!r.ok) { setError(reasons[r.reason] ?? 'Verification failed.'); setStatus('idle'); lock.current = false; return; }
         found = r.quote;
-      } catch { setError(reasons['unavailable']!); setStatus('idle'); lock.current = false; return; }
+      } catch { setError(reasons['unavailable'] ?? 'Please try again.'); setStatus('idle'); lock.current = false; return; }
     } else {
-      if (code.trim().toUpperCase() !== task.accessCode.toUpperCase()) { setError(reasons['code']!); setStatus('idle'); lock.current = false; return; }
+      if (code.trim().toUpperCase() !== task.accessCode.toUpperCase()) { setError(reasons['code'] ?? 'Check your access code.'); setStatus('idle'); lock.current = false; return; }
       const p = commentSchema.safeParse(comment); if (!p.success) { setError(p.error.issues[0]?.message ?? 'Check your comment.'); setStatus('idle'); lock.current = false; return; }
       found = p.data;
     }
