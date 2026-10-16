@@ -1,7 +1,6 @@
 import { z } from 'zod';
 
 export const COINS_PER_KSH = 10;
-export const TASK_REWARD = 20;
 export const REFERRAL_REWARD = 2;
 export const MIN_WITHDRAWAL = 50;
 export const WELCOME_BONUS = 25;
@@ -12,11 +11,19 @@ export const UPLINE_REWARD_FIRST_WITHDRAW = 25;
 export const REFERRAL_TASK_REWARD = 2;
 export const FREE_DAILY_REFERRAL_CAP = 2;
 export type Tier = 'Free' | 'Pro' | 'Premium';
-export const TIERS: Record<Tier, { dailyLimit: number; priceKsh: number; priceCoins: number; unlockTasks: number }> = {
-  Free: { dailyLimit: 3, priceKsh: 0, priceCoins: 0, unlockTasks: 0 },
-  Pro: { dailyLimit: 5, priceKsh: 150, priceCoins: 1500, unlockTasks: 16 },
-  Premium: { dailyLimit: 8, priceKsh: 350, priceCoins: 3500, unlockTasks: 40 },
+export const TIERS: Record<Tier, { videos: readonly number[]; dailyReward: readonly [number, number]; priceKsh: number; priceCoins: number; unlockTasks: number }> = {
+  Free: { videos: [3, 4], dailyReward: [56, 60], priceKsh: 0, priceCoins: 0, unlockTasks: 0 },
+  Pro: { videos: [6, 7], dailyReward: [99, 106], priceKsh: 150, priceCoins: 1500, unlockTasks: 16 },
+  Premium: { videos: [10, 11, 12], dailyReward: [199, 207], priceKsh: 350, priceCoins: 3500, unlockTasks: 40 },
 };
+export type DailyBatch = { tier: Tier; videoCount: number; reward: number };
+export function createDailyBatch(tier: Tier, random = Math.random): DailyBatch {
+  const config = TIERS[tier];
+  const videoCount = config.videos[Math.floor(random() * config.videos.length)] ?? config.videos[0] ?? 3;
+  const [min, max] = config.dailyReward;
+  return { tier, videoCount, reward: min + Math.floor(random() * (max - min + 1)) };
+}
+export const canClaimDaily = (batch: DailyBatch, verifiedCount: number, claimed: boolean) => !claimed && verifiedCount >= batch.videoCount;
 const RANK: Tier[] = ['Free', 'Pro', 'Premium'];
 export const tierRank = (t: Tier) => RANK.indexOf(t);
 /** Highest of the purchased tier and the tier unlocked organically by lifetime tasks. */

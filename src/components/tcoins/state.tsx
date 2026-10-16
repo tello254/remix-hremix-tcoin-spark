@@ -1,9 +1,9 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import one from '@/assets/task-1.jpg';
 import two from '@/assets/task-2.jpg';
 import three from '@/assets/task-3.jpg';
 import { toast } from 'sonner';
-import { campaignSlots, effectiveTier, FREE_DAILY_REFERRAL_CAP, REFERRAL_TASK_REWARD, TASK_REWARD, TIERS, tierRank, UPLINE_REWARD_FIRST_TASK, UPLINE_REWARD_FIRST_WITHDRAW, WELCOME_BONUS, withdrawableBalance, withdrawalMin, type Tier } from '@/lib/rewards';
+import { campaignSlots, canClaimDaily, createDailyBatch, effectiveTier, FREE_DAILY_REFERRAL_CAP, REFERRAL_TASK_REWARD, TIERS, tierRank, UPLINE_REWARD_FIRST_TASK, UPLINE_REWARD_FIRST_WITHDRAW, WELCOME_BONUS, withdrawableBalance, withdrawalMin, type DailyBatch, type Tier } from '@/lib/rewards';
 
 export type Platform = 'YouTube' | 'TikTok' | 'Instagram';
 export type Campaign = { id: string; title: string; creator: string; platform: Platform; thumbnail: string; url: string; budget: number; payout: number; completed: number; slots: number; duration: string; accessCode: string; instruction: string };
@@ -14,7 +14,7 @@ const initialCampaigns: Campaign[] = [
   { id: '2', title: 'Nairobi after hours: a different view', creator: 'Explore with Kevin', platform: 'YouTube', thumbnail: two, url: 'https://www.youtube.com/results?search_query=nairobi+after+hours', budget: 1000, payout: 2, completed: 246, slots: 500, duration: '12:06', accessCode: 'NBO7', instruction: 'Comment 3+ words about your favourite scene.' },
   { id: '3', title: 'A little rhythm. A lot of Nairobi.', creator: 'Nia Moves', platform: 'TikTok', thumbnail: three, url: 'https://vm.tiktok.com/ZSg8tPbNv/', budget: 1000, payout: 2, completed: 418, slots: 500, duration: '0:58', accessCode: 'NIA58', instruction: 'Comment 3+ words. The access code is in the creator’s comment.' },
 ];
-const extraTitles = ['Small steps, bigger dreams', 'A weekend in the city', 'Behind the moves', 'Five minutes of inspiration', 'The Nairobi you haven’t seen'];
+const extraTitles = ['Small steps, bigger dreams', 'A weekend in the city', 'Behind the moves', 'Five minutes of inspiration', 'The Nairobi you haven’t seen', 'A new perspective', 'City stories', 'Finding your rhythm', 'Making it count'];
 extraTitles.forEach((title, index) => { const source = initialCampaigns[index % 3]; if (source) initialCampaigns.push({ ...source, id: String(index + 4), title, completed: 100 + index * 37 }); });
 const initialEntries: Entry[] = [
   { id: 'e1', label: 'Video task completed', detail: 'The Growth Diaries', coins: 20, kind: 'task', time: 'Today, 10:42 AM' },
@@ -33,9 +33,14 @@ function useStore() {
   const [boughtTier, setBoughtTier] = useState<Tier>('Free');
   const [lifetimeTasks, setLifetimeTasks] = useState(11);
   const tier = effectiveTier(boughtTier, lifetimeTasks);
-  const dailyLimit = TIERS[tier].dailyLimit;
+  const [batch, setBatch] = useState<DailyBatch>({ tier: 'Free', videoCount: 3, reward: 60 });
+  const dailyLimit = batch.videoCount;
+  const [batchVersion, setBatchVersion] = useState(0);
+  const dayRef = useRef('');
+  const completedRef = useRef(new Set<string>());
+  const claimRef = useRef(false);
   const [campaigns, setCampaigns] = useState(initialCampaigns);
-  useEffect(() => { setCampaigns(v => { const first = v.slice(0, 3).sort(() => Math.random() - 0.5); return [...first, ...v.slice(3)]; }); }, []);
+  useEffect(() => { dayRef.current = new Date().toISOString().slice(0, 10); setBatch(createDailyBatch('Free')); setCampaigns(v => [...v].sort(() => Math.random() - 0.5)); }, []);
   const [done, setDone] = useState<string[]>([]);
   const [entries, setEntries] = useState(initialEntries);
   const [onboarded, setOnboarded] = useState(false);
@@ -51,7 +56,8 @@ function useStore() {
   /** Records a reviewed task. Tcoins are only paid out once the daily quota is 100% done. */
   const completeTask = (id: string, ok: boolean, handle: string) => {
     const campaign = campaigns.find(c => c.id === id);
-    if (!campaign || done.includes(id) || campaign.completed >= campaign.slots || done.length >= dailyLimit) return false;
+    if (!ok || !campaign || !campaigns.slice(0, dailyLimit).some(c => c.id === id) || completedRef.current.has(id) || campaign.completed >= campaign.slots || completedRef.current.size >= dailyLimit) return false;
+    completedRef.current.add(id);
     setDone(v => [...v, id]);
     if (ok) {
       setPassed(v => v + 1); setLifetimeTasks(v => v + 1);
@@ -61,10 +67,9 @@ function useStore() {
     addEntry({ label: ok ? 'Video task verified' : 'Video task not granted', detail: `${campaign.creator} · @${handle.replace(/^@/, '')}`, coins: 0, kind: 'task' });
     return true;
   };
-  const [claimAmount] = useState(() => Math.floor(Math.random() * 5));
-  const pendingReward = passed > 0 ? passed * TASK_REWARD - claimAmount : 0;
-  const quotaDone = done.length >= dailyLimit;
-  const claimDaily = () => { if (claimed || !quotaDone || pendingReward <= 0) return 0; setClaimed(true); setBalance(v => v + pendingReward); addEntry({ label: 'Daily tasks reward', detail: `${passed} verified tasks`, coins: pendingReward, kind: 'task' }); return pendingReward; };
+  const quotaDone = passed >= dailyLimit;
+  const pendingReward = quotaDone && !claimed ? batch.reward : 0;
+  const claimDaily = () => { if (!canClaimDaily(batch, completedRef.current.size, claimRef.current)) return 0; claimRef.current = true; setClaimed(true); setBalance(v => v + batch.reward); addEntry({ label: 'Daily tasks reward', detail: `${dailyLimit} verified tasks · Complete daily batch`, coins: batch.reward, kind: 'task' }); return batch.reward; };
   const withdrawable = withdrawableBalance(balance, referralToday, quotaDone);
   const minWithdrawal = withdrawalMin(hasWithdrawn);
   const withdraw = (coins: number, method: string, receipt: string) => { setBalance(v => v - coins); setHasWithdrawn(true); addEntry({ label: `${method} withdrawal`, detail: `${receipt} · Completed`, coins: -coins, kind: 'withdrawal' }); };
@@ -90,8 +95,9 @@ function useStore() {
     setBoughtTier(t); return null;
   };
   /** 00:00 UTC rollover: unfinished tasks are pulled, nothing carries over. */
-  const rollDay = () => { setDone([]); setPassed(0); setClaimed(false); setReferralCreditsToday(0); setReferralToday(0); };
-  return { balance, profile, setProfile, tier, boughtTier, lifetimeTasks, buyTier, campaigns, done, entries, completeTask, claimDaily, pendingReward, claimed, passed, withdraw, withdrawable, minWithdrawal, hasWithdrawn, quotaDone, referralToday, addCampaign, onboarded, setOnboarded, welcomeSeen, setWelcomeSeen, friends, advanceReferral, referralCreditsToday, referralCapReached, rollDay, dailyLimit, reward: TASK_REWARD };
+  const rollDay = () => { dayRef.current = new Date().toISOString().slice(0, 10); completedRef.current.clear(); claimRef.current = false; setBatch(createDailyBatch(tier)); setBatchVersion(v => v + 1); setCampaigns(v => [...v].sort(() => Math.random() - 0.5)); setDone([]); setPassed(0); setClaimed(false); setReferralCreditsToday(0); setReferralToday(0); };
+  useEffect(() => { const check = () => { if (dayRef.current && dayRef.current !== new Date().toISOString().slice(0, 10)) rollDay(); }; const timer = setInterval(check, 1000); window.addEventListener('focus', check); return () => { clearInterval(timer); window.removeEventListener('focus', check); }; }, [tier]);
+  return { balance, profile, setProfile, tier, boughtTier, lifetimeTasks, buyTier, campaigns, done, entries, completeTask, claimDaily, pendingReward, claimed, passed, withdraw, withdrawable, minWithdrawal, hasWithdrawn, quotaDone, referralToday, addCampaign, onboarded, setOnboarded, welcomeSeen, setWelcomeSeen, friends, advanceReferral, referralCreditsToday, referralCapReached, rollDay, dailyLimit, dailyReward: batch.reward, batchVersion };
 }
 const Store = createContext<ReturnType<typeof useStore> | null>(null);
 export function TcoinsProvider({ children }: { children: ReactNode }) { const store = useStore(); return <Store.Provider value={store}>{children}</Store.Provider>; }
