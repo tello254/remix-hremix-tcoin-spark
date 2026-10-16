@@ -13,3 +13,4 @@
 - Keep the Tcoins preview in a shared React context with in-memory state; this prevents accidental real verification or payments before service integration.
 - Render each content page as its own TanStack leaf route using a shared application shell and feature views; this preserves navigation and per-page metadata.
 - Centralize reward validation and currency calculations in a browser-safe module so simulated flows use the same financial rules.
+- Derive the active tier from purchased badge and lifetime tasks (never store it directly); organic unlocks then can't drift from purchases.
