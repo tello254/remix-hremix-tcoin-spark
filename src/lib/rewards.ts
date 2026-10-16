@@ -4,6 +4,31 @@ export const COINS_PER_KSH = 10;
 export const TASK_REWARD = 20;
 export const REFERRAL_REWARD = 2;
 export const MIN_WITHDRAWAL = 50;
+export const WELCOME_BONUS = 25;
+export const FIRST_WITHDRAWAL_MIN = 50;
+export const REGULAR_WITHDRAWAL_MIN = 300;
+export const UPLINE_REWARD_FIRST_TASK = 25;
+export const UPLINE_REWARD_FIRST_WITHDRAW = 25;
+export const REFERRAL_TASK_REWARD = 2;
+export const FREE_DAILY_REFERRAL_CAP = 2;
+export type Tier = 'Free' | 'Pro' | 'Premium';
+export const TIERS: Record<Tier, { dailyLimit: number; priceKsh: number; priceCoins: number; unlockTasks: number }> = {
+  Free: { dailyLimit: 3, priceKsh: 0, priceCoins: 0, unlockTasks: 0 },
+  Pro: { dailyLimit: 5, priceKsh: 150, priceCoins: 1500, unlockTasks: 16 },
+  Premium: { dailyLimit: 8, priceKsh: 350, priceCoins: 3500, unlockTasks: 40 },
+};
+const RANK: Tier[] = ['Free', 'Pro', 'Premium'];
+export const tierRank = (t: Tier) => RANK.indexOf(t);
+/** Highest of the purchased tier and the tier unlocked organically by lifetime tasks. */
+export function effectiveTier(bought: Tier, lifetimeTasks: number): Tier {
+  const organic: Tier = lifetimeTasks >= TIERS.Premium.unlockTasks ? 'Premium' : lifetimeTasks >= TIERS.Pro.unlockTasks ? 'Pro' : 'Free';
+  return tierRank(organic) > tierRank(bought) ? organic : bought;
+}
+export function nextUtcReset(now = new Date()) { return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1)); }
+export const withdrawalMin = (hasWithdrawn: boolean) => hasWithdrawn ? REGULAR_WITHDRAWAL_MIN : FIRST_WITHDRAWAL_MIN;
+/** Referral Tcoins earned today stay locked until the user's own daily quota is complete. */
+export const withdrawableBalance = (balance: number, referralToday: number, quotaDone: boolean) => Math.max(0, quotaDone ? balance : balance - referralToday);
+export const normalizePhone = (p: string) => p.replace(/\s/g, '').replace(/^(?:\+254|254|0)/, '');
 export const profileSchema = z.object({
   name: z.string().trim().min(2, 'Enter your name').max(60),
   phone: z.string().trim().regex(/^(?:\+254|254|0)[17]\d{8}$/, 'Enter a valid Kenyan phone number'),
@@ -12,10 +37,12 @@ export const profileSchema = z.object({
   instagram: z.array(z.string().trim().regex(/^@[\w.-]{2,40}$/, 'Enter an Instagram handle starting with @')).max(3),
 });
 export const commentSchema = z.string().trim().max(1000).refine(v => v.split(/\s+/).filter(Boolean).length >= 3, 'Leave a natural comment of at least 3 words.');
-export function validateCashout(amount: number, balance: number, phone: string) {
-  if (!Number.isInteger(amount) || amount < MIN_WITHDRAWAL) return 'Withdraw at least 50 whole Tcoins.';
-  if (amount > balance) return 'Your balance is too low for this withdrawal.';
+export function validateCashout(amount: number, balance: number, phone: string, opts: { min?: number; accountPhone?: string } = {}) {
+  const min = opts.min ?? MIN_WITHDRAWAL;
+  if (!Number.isInteger(amount) || amount < min) return `Withdraw at least ${min} whole Tcoins.`;
+  if (amount > balance) return 'Your withdrawable balance is too low for this withdrawal.';
   if (!/^(?:\+254|254|0)[17]\d{8}$/.test(phone)) return 'Enter a valid Kenyan phone number.';
+  if (opts.accountPhone && normalizePhone(phone) !== normalizePhone(opts.accountPhone)) return 'Payouts go only to the phone number registered on your account.';
   return null;
 }
 export function campaignSlots(budget: number, payout: number) {
