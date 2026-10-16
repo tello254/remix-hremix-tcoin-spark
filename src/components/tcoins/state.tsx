@@ -2,11 +2,12 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from '
 import one from '@/assets/task-1.jpg';
 import two from '@/assets/task-2.jpg';
 import three from '@/assets/task-3.jpg';
-import { campaignSlots, REFERRAL_REWARD, TASK_REWARD } from '@/lib/rewards';
+import { toast } from 'sonner';
+import { campaignSlots, effectiveTier, FREE_DAILY_REFERRAL_CAP, REFERRAL_TASK_REWARD, TASK_REWARD, TIERS, tierRank, UPLINE_REWARD_FIRST_TASK, UPLINE_REWARD_FIRST_WITHDRAW, WELCOME_BONUS, withdrawableBalance, withdrawalMin, type Tier } from '@/lib/rewards';
 
 export type Platform = 'YouTube' | 'TikTok' | 'Instagram';
 export type Campaign = { id: string; title: string; creator: string; platform: Platform; thumbnail: string; url: string; budget: number; payout: number; completed: number; slots: number; duration: string; accessCode: string; instruction: string };
-export type Entry = { id: string; label: string; detail: string; coins: number; kind: 'task' | 'withdrawal' | 'referral'; time: string };
+export type Entry = { id: string; label: string; detail: string; coins: number; kind: 'task' | 'withdrawal' | 'referral' | 'bonus' | 'badge'; time: string };
 export type Profile = { name: string; phone: string; youtube: string[]; tiktok: string[]; instagram: string[] };
 const initialCampaigns: Campaign[] = [
   { id: '1', title: 'The habits that changed my life', creator: 'The Growth Diaries', platform: 'YouTube', thumbnail: one, url: 'https://www.youtube.com/results?search_query=kenya+growth+diaries', budget: 1000, payout: 2, completed: 382, slots: 500, duration: '8:24', accessCode: 'GROW24', instruction: 'Like the video and leave a comment of 3+ words.' },
@@ -17,39 +18,80 @@ const extraTitles = ['Small steps, bigger dreams', 'A weekend in the city', 'Beh
 extraTitles.forEach((title, index) => { const source = initialCampaigns[index % 3]; if (source) initialCampaigns.push({ ...source, id: String(index + 4), title, completed: 100 + index * 37 }); });
 const initialEntries: Entry[] = [
   { id: 'e1', label: 'Video task completed', detail: 'The Growth Diaries', coins: 20, kind: 'task', time: 'Today, 10:42 AM' },
-  { id: 'e2', label: 'Referral reward', detail: 'Brian completed a task', coins: REFERRAL_REWARD, kind: 'referral', time: 'Today, 9:18 AM' },
-  { id: 'e3', label: 'M-Pesa withdrawal', detail: 'TC9KP4M2 · Completed', coins: -100, kind: 'withdrawal', time: 'Yesterday, 4:30 PM' },
+  { id: 'e2', label: 'Referral reward', detail: 'Faith completed a task', coins: REFERRAL_TASK_REWARD, kind: 'referral', time: 'Today, 9:18 AM' },
+  { id: 'e0', label: 'Welcome bonus', detail: 'Thanks for joining Tcoins', coins: WELCOME_BONUS, kind: 'bonus', time: '3 days ago' },
+];
+export type Friend = { name: string; stage: 0 | 1 | 2 | 3; tasks: number; earned: number };
+const initialFriends: Friend[] = [
+  { name: 'Faith Wanjiku', stage: 3, tasks: 9, earned: 50 + 8 * REFERRAL_TASK_REWARD },
+  { name: 'Brian Otieno', stage: 1, tasks: 1, earned: UPLINE_REWARD_FIRST_TASK },
+  { name: 'Kevin Kariuki', stage: 0, tasks: 0, earned: 0 },
 ];
 function useStore() {
   const [balance, setBalance] = useState(240);
   const [profile, setProfile] = useState<Profile>({ name: 'Alex Mwangi', phone: '0712345678', youtube: ['@alexmwangi'], tiktok: ['@alexmwangi'], instagram: ['@alexmwangi'] });
-  const [tier, setTier] = useState<'Free' | 'Pro'>('Free');
+  const [boughtTier, setBoughtTier] = useState<Tier>('Free');
+  const [lifetimeTasks, setLifetimeTasks] = useState(11);
+  const tier = effectiveTier(boughtTier, lifetimeTasks);
+  const dailyLimit = TIERS[tier].dailyLimit;
   const [campaigns, setCampaigns] = useState(initialCampaigns);
   useEffect(() => { setCampaigns(v => { const first = v.slice(0, 3).sort(() => Math.random() - 0.5); return [...first, ...v.slice(3)]; }); }, []);
   const [done, setDone] = useState<string[]>([]);
   const [entries, setEntries] = useState(initialEntries);
   const [onboarded, setOnboarded] = useState(false);
-  const [referralTasks, setReferralTasks] = useState(38);
+  const [welcomeSeen, setWelcomeSeen] = useState(false);
+  const [hasWithdrawn, setHasWithdrawn] = useState(false);
+  const [uplinePaid, setUplinePaid] = useState(false);
+  const [friends, setFriends] = useState(initialFriends);
+  const [referralCreditsToday, setReferralCreditsToday] = useState(0);
+  const [referralToday, setReferralToday] = useState(REFERRAL_TASK_REWARD);
   const addEntry = (entry: Omit<Entry, 'id' | 'time'>) => setEntries(v => [{ ...entry, id: crypto.randomUUID(), time: 'Just now' }, ...v]);
   const [passed, setPassed] = useState(0);
   const [claimed, setClaimed] = useState(false);
   /** Records a reviewed task. Tcoins are only paid out once the daily quota is 100% done. */
   const completeTask = (id: string, ok: boolean, handle: string) => {
     const campaign = campaigns.find(c => c.id === id);
-    if (!campaign || done.includes(id) || campaign.completed >= campaign.slots || done.length >= (tier === 'Free' ? 3 : 8)) return false;
+    if (!campaign || done.includes(id) || campaign.completed >= campaign.slots || done.length >= dailyLimit) return false;
     setDone(v => [...v, id]);
-    if (ok) { setPassed(v => v + 1); setCampaigns(v => v.map(c => c.id === id ? { ...c, completed: Math.min(c.slots, c.completed + 1) } : c)); }
+    if (ok) {
+      setPassed(v => v + 1); setLifetimeTasks(v => v + 1);
+      setCampaigns(v => v.map(c => c.id === id ? { ...c, completed: Math.min(c.slots, c.completed + 1) } : c));
+      if (!uplinePaid) { setUplinePaid(true); toast.success(`Your upline received ${UPLINE_REWARD_FIRST_TASK} Tcoins for your first review!`); }
+    }
     addEntry({ label: ok ? 'Video task verified' : 'Video task not granted', detail: `${campaign.creator} · @${handle.replace(/^@/, '')}`, coins: 0, kind: 'task' });
     return true;
   };
-  /** Varied payout (e.g. 56–60 for three tasks) so rewards don't feel automated. */
   const [claimAmount] = useState(() => Math.floor(Math.random() * 5));
   const pendingReward = passed > 0 ? passed * TASK_REWARD - claimAmount : 0;
-  const claimDaily = () => { if (claimed || done.length < (tier === 'Free' ? 3 : 8) || pendingReward <= 0) return 0; setClaimed(true); setBalance(v => v + pendingReward); addEntry({ label: 'Daily tasks reward', detail: `${passed} verified tasks`, coins: pendingReward, kind: 'task' }); return pendingReward; };
-  const withdraw = (coins: number, method: string, receipt: string) => { setBalance(v => v - coins); addEntry({ label: `${method} withdrawal`, detail: `${receipt} · Completed`, coins: -coins, kind: 'withdrawal' }); };
+  const quotaDone = done.length >= dailyLimit;
+  const claimDaily = () => { if (claimed || !quotaDone || pendingReward <= 0) return 0; setClaimed(true); setBalance(v => v + pendingReward); addEntry({ label: 'Daily tasks reward', detail: `${passed} verified tasks`, coins: pendingReward, kind: 'task' }); return pendingReward; };
+  const withdrawable = withdrawableBalance(balance, referralToday, quotaDone);
+  const minWithdrawal = withdrawalMin(hasWithdrawn);
+  const withdraw = (coins: number, method: string, receipt: string) => { setBalance(v => v - coins); setHasWithdrawn(true); addEntry({ label: `${method} withdrawal`, detail: `${receipt} · Completed`, coins: -coins, kind: 'withdrawal' }); };
   const addCampaign = (data: { title: string; url: string; platform: Platform; thumbnail: string; budget: number; payout: number; accessCode: string; instruction: string }) => setCampaigns(v => [...v, { ...data, thumbnail: data.thumbnail || one, id: crypto.randomUUID(), creator: profile.name, completed: 0, slots: campaignSlots(data.budget, data.payout), duration: 'New' }]);
-  const simulateReferral = () => { setReferralTasks(v => v + 1); setBalance(v => v + REFERRAL_REWARD); addEntry({ label: 'Referral reward', detail: 'Brian completed a task', coins: REFERRAL_REWARD, kind: 'referral' }); };
-  return { balance, profile, setProfile, tier, setTier, campaigns, done, entries, completeTask, claimDaily, pendingReward, claimed, passed, withdraw, addCampaign, onboarded, setOnboarded, referralTasks, simulateReferral, dailyLimit: tier === 'Free' ? 3 : 8, reward: TASK_REWARD, referralReward: REFERRAL_REWARD };
+  const referralCapReached = tier === 'Free' && referralCreditsToday >= FREE_DAILY_REFERRAL_CAP;
+  /** Moves a direct referral one step: first video (+25), first withdrawal (+25), then +2 per task. Milestones count against the Free daily cap. */
+  const advanceReferral = (name: string) => {
+    const f = friends.find(x => x.name === name); if (!f) return;
+    const milestone = f.stage < 2;
+    if (milestone && referralCapReached) { toast.error(`Daily referral cap reached (${FREE_DAILY_REFERRAL_CAP}/${FREE_DAILY_REFERRAL_CAP}). Upgrade to Pro for unlimited.`); return; }
+    const coins = f.stage === 0 ? UPLINE_REWARD_FIRST_TASK : f.stage === 1 ? UPLINE_REWARD_FIRST_WITHDRAW : REFERRAL_TASK_REWARD;
+    const label = f.stage === 0 ? 'reviewed their first video' : f.stage === 1 ? 'made their first withdrawal' : 'completed a task';
+    setFriends(v => v.map(x => x.name === name ? { ...x, stage: Math.min(3, x.stage + 1) as Friend['stage'], tasks: x.tasks + (x.stage === 1 ? 0 : 1), earned: x.earned + coins } : x));
+    if (milestone) setReferralCreditsToday(v => v + 1);
+    setReferralToday(v => v + coins); setBalance(v => v + coins);
+    addEntry({ label: 'Referral reward', detail: `${name.split(' ')[0]} ${label}`, coins, kind: 'referral' });
+  };
+  /** Buys a badge with Tcoins (deducted) or simulated M-Pesa. */
+  const buyTier = (t: Tier, method: 'mpesa' | 'coins') => {
+    if (tierRank(t) <= tierRank(tier)) return 'You already have this badge.';
+    if (method === 'coins') { if (balance < TIERS[t].priceCoins) return `You need ${TIERS[t].priceCoins.toLocaleString()} Tcoins.`; setBalance(v => v - TIERS[t].priceCoins); addEntry({ label: `${t} badge`, detail: 'Paid with Tcoins', coins: -TIERS[t].priceCoins, kind: 'badge' }); }
+    else addEntry({ label: `${t} badge`, detail: `KSH ${TIERS[t].priceKsh} · M-Pesa (simulated)`, coins: 0, kind: 'badge' });
+    setBoughtTier(t); return null;
+  };
+  /** 00:00 UTC rollover: unfinished tasks are pulled, nothing carries over. */
+  const rollDay = () => { setDone([]); setPassed(0); setClaimed(false); setReferralCreditsToday(0); setReferralToday(0); };
+  return { balance, profile, setProfile, tier, boughtTier, lifetimeTasks, buyTier, campaigns, done, entries, completeTask, claimDaily, pendingReward, claimed, passed, withdraw, withdrawable, minWithdrawal, hasWithdrawn, quotaDone, referralToday, addCampaign, onboarded, setOnboarded, welcomeSeen, setWelcomeSeen, friends, advanceReferral, referralCreditsToday, referralCapReached, rollDay, dailyLimit, reward: TASK_REWARD };
 }
 const Store = createContext<ReturnType<typeof useStore> | null>(null);
 export function TcoinsProvider({ children }: { children: ReactNode }) { const store = useStore(); return <Store.Provider value={store}>{children}</Store.Provider>; }
