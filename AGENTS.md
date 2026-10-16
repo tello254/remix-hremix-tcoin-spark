@@ -14,3 +14,4 @@
 - Render each content page as its own TanStack leaf route using a shared application shell and feature views; this preserves navigation and per-page metadata.
 - Centralize reward validation and currency calculations in a browser-safe module so simulated flows use the same financial rules.
 - Derive the active tier from purchased badge and lifetime tasks (never store it directly); organic unlocks then can't drift from purchases.
+- Freeze each daily batch's assigned video count and total reward until UTC rollover; tier changes apply to the next batch so upgrades cannot move an in-progress earning target.
