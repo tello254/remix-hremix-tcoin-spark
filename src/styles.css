@@ -48,8 +48,22 @@
 .tier-current { border-color: var(--primary); } .tier-actions { display: grid; gap: .4rem; }
 .overview-two{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
 .header-balance{display:flex;align-items:center;gap:8px;padding:5px 11px 5px 6px;border:1px solid var(--border);border-radius:999px;background:var(--card);color:var(--foreground);text-decoration:none;font-size:12px}.header-balance small{color:var(--muted-foreground);font-size:9px}
-.spin-coin{width:120px;height:120px;perspective:600px;display:inline-block}.spin-coin-sm{width:24px;height:24px}.spin-face{width:100%;height:100%;display:grid;place-items:center;border-radius:50%;background:var(--coin-gradient);border:2px solid var(--gold);box-shadow:var(--coin-shadow);color:var(--background);font-family:var(--font-display);font-weight:700;font-size:56px;animation:coin-spin 3.2s linear infinite;transform-style:preserve-3d}.spin-coin-sm .spin-face{font-size:12px;border-width:1px}
-@keyframes coin-spin{from{transform:rotateY(0)}to{transform:rotateY(360deg)}}
-.wallet-total{position:relative}.wallet-coin{position:absolute;right:20px;top:20px}
-@media (max-width:640px){.header-balance small{display:none}.wallet-coin{transform:scale(.6);transform-origin:top right;right:8px;top:8px}.overview-two{grid-template-columns:1fr}}
-@media (prefers-reduced-motion:reduce){.spin-face{animation:none}}
+/* The original three-coin balance artwork remains a bundled image. */
+.wallet-total{position:relative;overflow:hidden;min-height:285px}
+.wallet-total>.panel-label,.wallet-total>.balance-number,.wallet-total>p,.wallet-total>button,.wallet-total>small{position:relative;z-index:1}
+.wallet-total>.balance-number{max-width:calc(100% - 125px);line-height:1.15}
+.wallet-total>.balance-number>span{display:block;margin-top:5px}
+.wallet-total>small{max-width:100%}
+.wallet-coins-art{position:absolute;right:8px;top:35px;width:175px;height:175px;object-fit:contain;pointer-events:none;animation:coin-float 6s ease-in-out infinite}
+.spin-coin{--coin-depth:2px;display:inline-block;width:20px;height:20px;perspective:180px;flex-shrink:0}
+.spin-body{display:block;width:100%;height:100%;position:relative;transform-style:preserve-3d;animation:coin-spin 5s linear infinite}
+.spin-face,.spin-edge{position:absolute;inset:0;border-radius:50%;background:var(--coin-gradient);border:1px solid var(--gold)}
+.spin-face{display:grid;place-items:center;color:var(--background);font-family:var(--font-display);font-weight:700;font-size:11px;backface-visibility:hidden;box-shadow:inset 0 0 0 2px var(--gold),var(--coin-shadow)}
+.spin-front{transform:translateZ(var(--coin-depth))}
+.spin-back{transform:rotateY(180deg) translateZ(var(--coin-depth))}
+.spin-edge{background:var(--gold);box-shadow:0 0 0 1px var(--gold);transform:translateZ(0)}
+.spin-edge::before,.spin-edge::after{content:"";position:absolute;inset:-1px;border-radius:50%;background:var(--coin-gradient);transform:translateZ(1px)}
+.spin-edge::after{transform:translateZ(-1px)}
+@keyframes coin-spin{from{transform:rotateX(-12deg) rotateY(0)}to{transform:rotateX(-12deg) rotateY(360deg)}}
+@media(max-width:640px){.header-balance small{display:none}.wallet-coins-art{width:145px;height:145px;right:2px;top:38px}.wallet-total{padding:24px}.wallet-total>.balance-number{max-width:calc(100% - 112px)}.overview-two{grid-template-columns:1fr}}
+@media(prefers-reduced-motion:reduce){.spin-body,.wallet-coins-art{animation:none}.spin-body{transform:rotateX(-12deg) rotateY(-25deg)}}
