@@ -46,3 +46,10 @@
 .tier-list { display: grid; gap: .75rem; } .tier-card { display: flex; gap: 1rem; align-items: center; justify-content: space-between; padding: .9rem 1rem; border: 1px solid var(--border); border-radius: .9rem; }
 .tier-card > div:first-child { flex: 1; display: grid; gap: .25rem; } .tier-card h3 { display: flex; gap: .35rem; align-items: center; font-weight: 700; } .tier-card p, .tier-card small { font-size: .8rem; opacity: .8; }
 .tier-current { border-color: var(--primary); } .tier-actions { display: grid; gap: .4rem; }
+.overview-two{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+.header-balance{display:flex;align-items:center;gap:8px;padding:5px 11px 5px 6px;border:1px solid var(--border);border-radius:999px;background:var(--card);color:var(--foreground);text-decoration:none;font-size:12px}.header-balance small{color:var(--muted-foreground);font-size:9px}
+.spin-coin{width:120px;height:120px;perspective:600px;display:inline-block}.spin-coin-sm{width:24px;height:24px}.spin-face{width:100%;height:100%;display:grid;place-items:center;border-radius:50%;background:var(--coin-gradient);border:2px solid var(--gold);box-shadow:var(--coin-shadow);color:var(--background);font-family:var(--font-display);font-weight:700;font-size:56px;animation:coin-spin 3.2s linear infinite;transform-style:preserve-3d}.spin-coin-sm .spin-face{font-size:12px;border-width:1px}
+@keyframes coin-spin{from{transform:rotateY(0)}to{transform:rotateY(360deg)}}
+.wallet-total{position:relative}.wallet-coin{position:absolute;right:20px;top:20px}
+@media (max-width:640px){.header-balance small{display:none}.wallet-coin{transform:scale(.6);transform-origin:top right;right:8px;top:8px}.overview-two{grid-template-columns:1fr}}
+@media (prefers-reduced-motion:reduce){.spin-face{animation:none}}

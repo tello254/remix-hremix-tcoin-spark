@@ -3,7 +3,7 @@ import one from '@/assets/task-1.jpg';
 import two from '@/assets/task-2.jpg';
 import three from '@/assets/task-3.jpg';
 import { toast } from 'sonner';
-import { campaignSlots, canClaimDaily, createDailyBatch, effectiveTier, FREE_DAILY_REFERRAL_CAP, REFERRAL_TASK_REWARD, TIERS, tierRank, UPLINE_REWARD_FIRST_TASK, UPLINE_REWARD_FIRST_WITHDRAW, WELCOME_BONUS, withdrawableBalance, withdrawalMin, type DailyBatch, type Tier } from '@/lib/rewards';
+import { campaignSlots, canClaimDaily, createDailyBatch, createDayOneBatch, effectiveTier, FREE_DAILY_REFERRAL_CAP, REFERRAL_TASK_REWARD, TIERS, tierRank, UPLINE_REWARD_FIRST_TASK, UPLINE_REWARD_FIRST_WITHDRAW, WELCOME_BONUS, withdrawableBalance, withdrawalMin, type DailyBatch, type Tier } from '@/lib/rewards';
 
 export type Platform = 'YouTube' | 'TikTok' | 'Instagram';
 export type Campaign = { id: string; title: string; creator: string; platform: Platform; thumbnail: string; url: string; budget: number; payout: number; completed: number; slots: number; duration: string; accessCode: string; instruction: string };
@@ -40,7 +40,7 @@ function useStore() {
   const completedRef = useRef(new Set<string>());
   const claimRef = useRef(false);
   const [campaigns, setCampaigns] = useState(initialCampaigns);
-  useEffect(() => { dayRef.current = new Date().toISOString().slice(0, 10); setBatch(createDailyBatch('Free')); setCampaigns(v => [...v].sort(() => Math.random() - 0.5)); }, []);
+  useEffect(() => { dayRef.current = new Date().toISOString().slice(0, 10); setBatch(createDayOneBatch()); setCampaigns(v => [...v].sort(() => Math.random() - 0.5)); }, []);
   const [done, setDone] = useState<string[]>([]);
   const [entries, setEntries] = useState(initialEntries);
   const [onboarded, setOnboarded] = useState(false);
