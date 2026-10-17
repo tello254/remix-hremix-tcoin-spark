@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useRef, useState, type Context, type ReactNode } from 'react';
 import one from '@/assets/task-1.jpg';
 import two from '@/assets/task-2.jpg';
 import three from '@/assets/task-3.jpg';
@@ -99,6 +99,9 @@ function useStore() {
   useEffect(() => { const check = () => { if (dayRef.current && dayRef.current !== new Date().toISOString().slice(0, 10)) rollDay(); }; const timer = setInterval(check, 1000); window.addEventListener('focus', check); return () => { clearInterval(timer); window.removeEventListener('focus', check); }; }, [tier]);
   return { balance, profile, setProfile, tier, boughtTier, lifetimeTasks, buyTier, campaigns, done, entries, completeTask, claimDaily, pendingReward, claimed, passed, withdraw, withdrawable, minWithdrawal, hasWithdrawn, quotaDone, referralToday, addCampaign, onboarded, setOnboarded, welcomeSeen, setWelcomeSeen, friends, advanceReferral, referralCreditsToday, referralCapReached, rollDay, dailyLimit, dailyReward: batch.reward, batchVersion };
 }
-const Store = createContext<ReturnType<typeof useStore> | null>(null);
+type StoreValue = ReturnType<typeof useStore>;
+/** Kept on globalThis so hot reloads reuse one context instead of splitting provider and consumers. */
+const g = globalThis as typeof globalThis & { __tcoinsStore?: Context<StoreValue | null> };
+const Store = g.__tcoinsStore ?? (g.__tcoinsStore = createContext<StoreValue | null>(null));
 export function TcoinsProvider({ children }: { children: ReactNode }) { const store = useStore(); return <Store.Provider value={store}>{children}</Store.Provider>; }
 export function useTcoins() { const store = useContext(Store); if (!store) throw new Error('TcoinsProvider is required'); return store; }
