@@ -101,7 +101,7 @@ function useStore() {
 }
 type StoreValue = ReturnType<typeof useStore>;
 /** Kept on globalThis so hot reloads reuse one context instead of splitting provider and consumers. */
-const g = globalThis as typeof globalThis & { __tcoinsStore?: React.Context<StoreValue | null> };
+const g = globalThis as typeof globalThis & { __tcoinsStore?: Context<StoreValue | null> };
 const Store = g.__tcoinsStore ?? (g.__tcoinsStore = createContext<StoreValue | null>(null));
 export function TcoinsProvider({ children }: { children: ReactNode }) { const store = useStore(); return <Store.Provider value={store}>{children}</Store.Provider>; }
 export function useTcoins() { const store = useContext(Store); if (!store) throw new Error('TcoinsProvider is required'); return store; }
