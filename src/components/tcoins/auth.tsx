@@ -25,7 +25,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
     if (e === 'SIGNED_OUT') { started.current = false; setTasking(false); }
     if (e === 'SIGNED_IN' && sess?.user) void navigate({ to: '/' });
     setSession(sess?.user?.id ?? null);
-  }).data.unsubscribe, [navigate]);
+  }).data.subscription.unsubscribe, [navigate]);
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => { setSession(data.session?.user?.id ?? null); setBooting(false); });
   }, []);
@@ -284,7 +284,7 @@ function ForgotScreen({ done }: { done: () => void }) {
         <input value={handle} maxLength={40} placeholder={platform === 'YouTube' ? 'channel name' : 'username'} onChange={e => { setHandle(e.target.value.toLowerCase()); suggest(e.target.value); }} />
       </label>
       <div className="handle-suggestions">{sugs.map(s => <Button key={s.handle} type="button" variant="ghost" className="handle-suggestion" onClick={() => setHandle(s.handle.toLowerCase())}>
-        <img src={s.avatar || coinImage} alt="" referrerPolicy="no-referrer" onError={noAvatar} />
+        <img src={coinImage} alt="" referrerPolicy="no-referrer" onError={noAvatar} />
         <span>{s.name || s.handle}<small>{s.handle}</small></span>
       </Button>)}</div>
       <Button variant="secondary" disabled={!handle || busy} onClick={next}>Next <ArrowRight size={14} /></Button>
