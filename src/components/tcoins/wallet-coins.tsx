@@ -104,8 +104,8 @@ export function InteractiveWalletCoins() {
       // 2. Inter-coin elastic collision & bounce physics
       for (let i = 0; i < coins.length; i++) {
         for (let j = i + 1; j < coins.length; j++) {
-          const c1 = coins[i];
-          const c2 = coins[j];
+          const c1 = coins[i]!;
+          const c2 = coins[j]!;
 
           const dx = c2.x - c1.x;
           const dy = c2.y - c1.y;

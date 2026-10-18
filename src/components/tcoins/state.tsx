@@ -76,7 +76,7 @@ function useStore() {
       // wallet = last balance_after in the immutable ledger (never a stored balance)
       if (ledger?.length) {
         const last = ledger[0];
-        setBalance(last.balance_after);
+        if (last) setBalance(last.balance_after);
         setEntries(ledger.map(r => ({
           id: r.id,
           label: r.kind === 'welcome_bonus' ? 'Welcome bonus' : r.kind === 'daily_batch' ? 'Daily tasks reward' : r.kind === 'referral_claim' ? 'Referral rewards unlocked' : r.kind === 'badge_purchase' ? 'Badge' : r.kind === 'withdrawal' ? 'M-Pesa withdrawal' : 'Refund',
@@ -94,7 +94,7 @@ function useStore() {
     return supabase.auth.onAuthStateChange((evt, sess) => {
       if (evt === 'SIGNED_OUT') { on('', true); return; }
       if (sess?.user) refresh();
-    }).data.unsubscribe;
+    }).data.subscription.unsubscribe;
   }, []);
   /**
    * Videos are NEVER assigned before login: this runs right after the session exists
