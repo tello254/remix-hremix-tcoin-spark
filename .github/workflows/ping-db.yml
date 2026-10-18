@@ -1,0 +1,21 @@
+# Keeps the free-tier Supabase project from being paused for inactivity.
+# Runs a harmless REST read every 3 days. The publishable (anon) key is public by design —
+# it ships inside the browser bundle — so this needs no repository secrets.
+name: Ping Supabase (keep-alive)
+
+on:
+  schedule:
+    - cron: '30 4 */3 * *'   # 04:30 UTC every 3 days
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: REST ping profiles
+        run: |
+          code=$(curl -s -o /dev/null -w "%{http_code}" \
+            "https://efuenigsccernwzhswnp.supabase.co/rest/v1/profiles?select=id&limit=1" \
+            -H "apikey: sb_publishable_bSTwFzUoUjzyFkKynt3SJA_CrQSBnkq")
+          echo "HTTP $code"
+          test "$code" = "200" || test "$code" = "304"

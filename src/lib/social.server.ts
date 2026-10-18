@@ -6,6 +6,22 @@ const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
 const YT_CTX = { client: { clientName: 'WEB', clientVersion: '2.20250101.00.00', hl: 'en', gl: 'KE' } };
 const clean = (h: string) => h.trim().replace(/^@/, '').toLowerCase();
 
+/** Decodes HTML entities in open-graph values (names contain emoji: &#x1f1f0; style). */
+const ENTITIES: Record<string, string> = { 'amp': '&', 'lt': '<', 'gt': '>', 'quot': '"', 'apos': "'" };
+const decodeEntities = (s: string) => s.replace(/&#(\d+);|&#x([0-9a-fA-F]+);|&(amp|lt|gt|quot|apos);/g, (m, dec: string, hex: string, word: string) => {
+  try {
+    if (dec) return String.fromCodePoint(parseInt(dec, 10));
+    if (hex) return String.fromCodePoint(parseInt(hex, 16));
+    return ENTITIES[word] ?? m;
+  } catch { return m; }
+});
+
+/** Cache one result per handle — profile pages are large so repeated typing must not refetch. */
+const igCache = new Map<string, Promise<SocialAccount | null>>();
+const ttCache = new Map<string, Promise<SocialAccount | null>>();
+
+export const sameHandle = (a: string, b: string) => clean(a) === clean(b);
+
 // ---------- TikTok ----------
 async function tiktokVideoId(url: string) {
   const direct = url.match(/\/video\/(\d+)/);
@@ -36,16 +52,43 @@ export async function tiktokComments(url: string, pages = 5): Promise<SocialComm
 export async function tiktokAccount(handle: string): Promise<SocialAccount | null> {
   const h = clean(handle);
   if (!/^[\w.]{2,24}$/.test(h)) return null;
-  const res = await fetch(`https://www.tiktok.com/@${h}`, { headers: { 'User-Agent': UA, 'Accept-Language': 'en' } });
-  const html = await res.text();
-  const m = html.match(/<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>([\s\S]*?)<\/script>/);
-  if (!m) return null;
-  try {
-    const d = JSON.parse(m[1]!);
-    const info = d.__DEFAULT_SCOPE__?.['webapp.user-detail']?.userInfo;
-    if (!info?.user?.uniqueId) return null;
-    return { handle: info.user.uniqueId, name: info.user.nickname, avatar: info.user.avatarThumb ?? '', followers: String(info.stats?.followerCount ?? '') };
-  } catch { return null; }
+  const hit = ttCache.get(h); if (hit) return hit;
+  const run = (async () => {
+    // 1) Open-graph via crawler UA — the browser-UA page JSON is walled behind TikTok's WAF,
+    //    but crawler UAs still get meta tags. Titles "«Name» on TikTok"; the generic
+    //    "Visit TikTok to discover profiles!" page means the handle does not exist.
+    try {
+      const res = await fetch(`https://www.tiktok.com/@${h}`, { headers: { 'User-Agent': 'facebookexternalhit/1.1', 'Accept-Language': 'en' } });
+      if (res.ok) {
+        const html = await res.text();
+        const title = decodeEntities(html.match(/<meta property="og:title" content="([^"]*)"/)?.[1] ?? '');
+        const desc = decodeEntities(html.match(/<meta property="og:description" content="([^"]*)"/)?.[1] ?? '');
+        const ogHandle = desc.match(/^@([\w.]+)/)?.[1];
+        if (ogHandle && sameHandle(ogHandle, h) && !/^Visit TikTok to discover profiles/i.test(title)) {
+          const avatar = (html.match(/<meta property="og:image" content="([^"]*)"/)?.[1] ?? '').replace(/&amp;/g, '&');
+          return {
+            handle: ogHandle,
+            name: title.replace(/\s*on TikTok$/i, '').trim(),
+            avatar,
+            followers: desc.split(',')[0]?.replace(/^@[\w.]+\s*/, '').trim() ?? '',
+          };
+        }
+      }
+    } catch { /* fall through */ }
+    // 2) Official oEmbed fallback — confirms existence and real name when og is unavailable (no stats).
+    try {
+      const res = await fetch(`https://www.tiktok.com/oembed?url=${encodeURIComponent(`https://www.tiktok.com/@${h}`)}`, { headers: { 'Accept': 'application/json' } });
+      if (res.ok) {
+        const j = await res.json() as { author_url?: string; author_name?: string };
+        const canonical = j.author_url?.match(/tiktok\.com\/@([\w.]+)/)?.[1];
+        if (canonical && sameHandle(canonical, h)) return { handle: canonical, name: j.author_name ?? canonical, avatar: '', followers: '' };
+      }
+    } catch { /* fall through */ }
+    return null;
+  })();
+  ttCache.set(h, run);
+  if (ttCache.size > 500) { const first = ttCache.keys().next(); if (!first.done) ttCache.delete(first.value); }
+  return run;
 }
 
 // ---------- YouTube ----------
@@ -96,8 +139,6 @@ export async function youtubeAccounts(query: string): Promise<SocialAccount[]> {
   }).filter((a: SocialAccount) => a.handle && !a.handle.startsWith('/'));
 }
 
-export const sameHandle = (a: string, b: string) => clean(a) === clean(b);
-
 export async function youtubeAccount(handle: string): Promise<SocialAccount | null> {
   const h = handle.trim().replace(/^@/, '');
   if (!/^[\w.-]{3,30}$/.test(h)) return null;
@@ -107,4 +148,33 @@ export async function youtubeAccount(handle: string): Promise<SocialAccount | nu
   const real = html.match(/"canonicalBaseUrl":"\/@([^"]+)"/)?.[1];
   if (!real) return null;
   return { handle: decodeURIComponent(real), name: html.match(/<meta property="og:title" content="([^"]*)"/)?.[1] ?? real, avatar: html.match(/<meta property="og:image" content="([^"]*)"/)?.[1] ?? '' };
+}
+
+// ---------- Instagram ----------
+/**
+ * Instagram profile lookup via open-graph crawler data: no login needed, and existence is
+ * confirmed only when the page carries canonical + og:title data (missing pages return a bare JS shell).
+ */
+export async function instagramAccount(handle: string): Promise<SocialAccount | null> {
+  const h = clean(handle);
+  if (!/^[\w.]{3,30}$/.test(h)) return null;
+  const hit = igCache.get(h); if (hit) return hit;
+  const run = (async () => {
+    try {
+      const res = await fetch(`https://www.instagram.com/${h}/`, { headers: { 'User-Agent': 'facebookexternalhit/1.1', 'Accept-Language': 'en' }, redirect: 'follow' });
+      if (!res.ok) return null;
+      const html = await res.text();
+      const canonical = html.match(/<link rel="canonical" href="https:\/\/www\.instagram\.com\/([\w.]+)\/"/)?.[1];
+      const title = decodeEntities(html.match(/<meta property="og:title" content="([^"]*)"/)?.[1] ?? '');
+      if (!canonical || !title) return null; // crawler shell without profile data = page not found
+      const desc = decodeEntities(html.match(/<meta property="og:description" content="([^"]*)"/)?.[1] ?? '');
+      const avatar = (html.match(/<meta property="og:image" content="([^"]*)"/)?.[1] ?? '').replace(/&amp;/g, '&');
+      const name = title.split('(')[0]?.trim() ?? '';
+      const followers = desc.split(',')[0]?.trim() ?? '';
+      return { handle: canonical, name: name || canonical, avatar, followers };
+    } catch { return null; }
+  })();
+  igCache.set(h, run);
+  if (igCache.size > 500) { const first = igCache.keys().next(); if (!first.done) igCache.delete(first.value); }
+  return run;
 }

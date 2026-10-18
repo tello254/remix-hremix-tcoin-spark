@@ -48,6 +48,8 @@
 .tier-current { border-color: var(--primary); } .tier-actions { display: grid; gap: .4rem; }
 .overview-two{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
 .header-balance{display:flex;align-items:center;gap:8px;padding:5px 11px 5px 6px;border:1px solid var(--border);border-radius:999px;background:var(--card);color:var(--foreground);text-decoration:none;font-size:12px}.header-balance small{color:var(--muted-foreground);font-size:9px}
+.header-balance.balance-flash{animation:balance-splash 1.5s cubic-bezier(.3,1.4,.4,1);z-index:5}
+@keyframes balance-splash{0%{transform:scale(1)}18%{transform:scale(1.24);background:color-mix(in oklch,var(--gold) 20%,var(--card));border-color:var(--gold);box-shadow:0 0 0 4px color-mix(in oklch,var(--gold) 30%,transparent),0 0 30px color-mix(in oklch,var(--primary) 55%,transparent)}50%{transform:scale(1.1)}100%{transform:scale(1)}}
 /* The original three-coin balance artwork remains a bundled image. */
 .wallet-total{position:relative;overflow:hidden;min-height:285px}
 .wallet-total>.panel-label,.wallet-total>.balance-number,.wallet-total>p,.wallet-total>button,.wallet-total>small{position:relative;z-index:1}
@@ -84,3 +86,71 @@
 .coin-spark-hit{position:absolute;pointer-events:none;color:var(--gold);font-size:24px;line-height:1;text-shadow:0 0 10px rgba(255,230,100,.9),0 0 20px rgba(245,192,55,.7);z-index:50}
 @media(max-width:640px){.wallet-coins-interactive{width:160px;right:4px;top:20px;bottom:20px}}
 
+
+
+/* ---------- Auth screens (signup / login / forgot PIN) ---------- */
+.auth-screen{min-height:100vh;position:relative;display:flex;align-items:center;justify-content:center;padding:24px;overflow:hidden;background:radial-gradient(circle at 14% 8%,oklch(.32/.14 145/.14) 0%,transparent 42%),radial-gradient(circle at 88% 90%,oklch(.45/.12 90/.13) 0%,transparent 46%),var(--background)}
+.auth-orb{position:absolute;border-radius:50%;filter:blur(60px);opacity:.5;pointer-events:none;animation:orb-float 14s ease-in-out infinite}
+.auth-orb-1{width:340px;height:340px;left:-90px;top:-60px;background:radial-gradient(circle,oklch(.45 .1 145/.4),transparent 70%)}
+.auth-orb-2{width:290px;height:290px;right:-70px;bottom:-40px;background:radial-gradient(circle,oklch(.5 .12 300/.35),transparent 70%);animation-delay:-6s}
+@keyframes orb-float{0%,100%{transform:translateY(0) scale(1)}50%{transform:translateY(-26px) scale(1.06)}}
+.auth-coin-big{position:absolute;z-index:0;pointer-events:none;opacity:.9;filter:blur(2.5px) drop-shadow(0 20px 44px rgba(0,0,0,.5));will-change:transform}
+.auth-coin-big-1{width:min(250px,36vw);top:11%;left:calc(50% - min(335px,46vw));animation:coin-under-spin 9s linear infinite}
+.auth-coin-big-2{width:min(210px,30vw);bottom:9%;right:calc(50% - min(320px,44vw));animation:coin-under-spin-rev 11s linear infinite}
+@keyframes coin-under-spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+@keyframes coin-under-spin-rev{from{transform:rotate(360deg)}to{transform:rotate(0deg)}}
+.auth-card{width:min(94vw,440px);max-width:440px;position:relative;z-index:1;background:color-mix(in oklch,var(--card) 90%,transparent);backdrop-filter:blur(12px);border:1px solid var(--border);border-radius:18px;padding:28px 26px;box-shadow:0 26px 70px -26px rgba(0,0,0,.6),0 0 0 1px rgba(134,239,172,.09) inset;display:grid;gap:16px;animation:auth-card-in .5s cubic-bezier(.22,1.2,.36,1)}
+@keyframes auth-card-in{from{opacity:0;transform:translateY(22px) scale(.96)}to{opacity:1;transform:none}}
+.auth-card::before{content:'';position:absolute;inset:-1.5px;border-radius:19px;padding:1.5px;background:linear-gradient(130deg,var(--primary),transparent 34%,transparent 62%,var(--gold));-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;pointer-events:none;opacity:.75}
+.auth-brand{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.auth-brand .brand-mark{animation:brand-coin 5s ease-in-out infinite;transform-origin:center;transform:rotate(-12deg)}
+@keyframes brand-coin{0%,100%{transform:rotate(-12deg) translateY(0)}50%{transform:rotate(0deg) translateY(-5px)}}
+.auth-brand h1{font-family:var(--font-display);font-size:26px;font-weight:800;margin:0}
+.auth-brand p{width:100%;font-size:12px;color:var(--muted-foreground);margin:2px 0 0}
+.auth-tabs{display:flex;gap:6px;border:1px solid var(--border);border-radius:999px;padding:4px;background:var(--background)}
+.auth-tabs button{flex:1;border-radius:999px;font-size:13px;padding:8px 10px}
+.auth-tabs .filter-active{background:color-mix(in oklch,var(--primary) 14%,var(--card));color:var(--primary)}
+.auth-form{display:grid;gap:13px;animation:auth-form-in .42s ease}
+@keyframes auth-form-in{from{opacity:0;transform:translateY(9px)}to{opacity:1;transform:none}}
+.auth-form .auth-cta{width:100%;height:44px;margin-top:4px;font-size:14px;background:var(--primary);color:var(--primary-foreground);box-shadow:0 8px 26px -8px color-mix(in oklch,var(--primary) 55%,transparent)}
+.auth-hint{font-size:11.5px;color:var(--muted-foreground);display:inline-flex;align-items:center;gap:4px}
+.auth-link{padding:4px;font-size:12.5px;justify-content:center}
+.auth-splash{display:grid;place-items:center;gap:14px;text-align:center;animation:auth-card-in .4s ease}
+.auth-splash strong{font-family:var(--font-display);font-size:21px;color:var(--foreground)}
+.auth-splash small{color:var(--muted-foreground);font-size:12px}
+.brand-mark-lg{width:58px;height:58px;font-size:28px;border-radius:16px;animation:brand-coin 2.4s ease-in-out infinite}
+.pin-row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.pin-reveal{animation:auth-card-in .42s cubic-bezier(.34,1.56,.64,1)}
+.pin-ok{display:flex;justify-content:center;color:var(--primary);animation:auth-form-in .3s ease}
+.auth-input-taken{border-color:var(--destructive)!important;box-shadow:0 0 0 1px color-mix(in oklch,var(--destructive) 55%,transparent)!important}
+.pin-wrap{position:relative}
+.pin-wrap button{position:absolute;right:3px;top:3px;bottom:3px;color:var(--muted-foreground);border-radius:5px;width:32px}
+.pin-wrap button:hover{color:var(--primary)}
+.pin-wrap input{padding-right:40px}
+.auth-platforms{display:flex;gap:6px;flex-wrap:wrap}
+.auth-platforms button{border:1px solid var(--border);border-radius:999px;padding:7px 14px;font-size:12.5px}
+.auth-steps{display:flex;gap:7px;font-size:13px;color:var(--muted-foreground)}
+.auth-step{width:26px;height:26px;display:grid;place-items:center;border:1px solid var(--border);border-radius:50%}
+.auth-step-on{color:var(--primary-foreground);background:var(--primary);border-color:var(--primary);font-weight:700}
+.handle-suggestions{display:grid;gap:6px;max-height:150px;overflow:auto}
+.handle-suggestion{justify-content:flex-start;gap:10px;border:1px solid var(--border);border-radius:10px;padding:6px 10px}
+.handle-suggestion img{width:26px;height:26px;border-radius:50%;object-fit:cover}
+.handle-suggestion span{display:grid;line-height:1.15;font-size:12.5px}
+.handle-suggestion small{color:var(--muted-foreground);font-size:10.5px}
+/* Full-screen confirmation overlays — sequential, animated, translucent card-themed */
+.warn-overlay{position:fixed;inset:0;z-index:90;display:grid;place-items:center;padding:22px;background:var(--overlay);backdrop-filter:blur(7px);animation:warn-fade .26s ease}
+.warn-overlay.closing{animation:warn-fade-out .24s ease forwards}
+@keyframes warn-fade{from{opacity:0}to{opacity:1}}
+@keyframes warn-fade-out{to{opacity:0}}
+.warn-card{width:min(92vw,412px);position:relative;color:#fff;background:color-mix(in oklch,var(--card) 86%,transparent);backdrop-filter:blur(16px);border:1.5px solid #86efac;border-radius:18px;padding:26px 24px;box-shadow:0 30px 80px -20px rgba(0,0,0,.65),0 0 0 1px rgba(134,239,172,.22) inset;animation:warn-pop .34s cubic-bezier(.34,1.56,.64,1)}
+.warn-overlay.closing .warn-card{animation:warn-pop-out .22s ease forwards}
+@keyframes warn-pop{from{opacity:0;transform:scale(.82) translateY(16px)}to{opacity:1;transform:none}}
+@keyframes warn-pop-out{to{opacity:0;transform:scale(.9) translateY(10px)}}
+.warn-card strong{color:#fff;font-size:14.5px;line-height:1.55;display:block;text-align:center}
+.warn-check{margin:18px auto 0;display:flex;gap:10px;align-items:center;justify-content:flex-start;width:fit-content;font-size:13px;cursor:pointer;color:#fff}
+.warn-check input{appearance:none;-webkit-appearance:none;width:21px;height:21px;flex-shrink:0;border:2px solid #86efac;border-radius:6px;background:transparent;cursor:pointer;display:grid;place-items:center;transition:all .2s}
+.warn-check input:checked{background:#4ade80;border-color:#4ade80;box-shadow:0 0 14px rgba(74,222,128,.5)}
+.warn-check input:checked::after{content:'';width:5px;height:9px;border:solid #08110a;border-width:0 2.5px 2.5px 0;transform:rotate(45deg) translate(-1px,-2px)}
+.warn-confirm{margin-top:16px;display:flex;gap:9px;align-items:center;justify-content:center;color:#fff;font-size:12.5px}
+.warn-confirm .spin{color:#4ade80}
+@media(max-width:640px){.auth-card{padding:22px 16px}.pin-row{grid-template-columns:1fr}.auth-coin-big{opacity:.75;filter:blur(4px)}}

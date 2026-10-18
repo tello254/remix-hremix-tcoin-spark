@@ -45,7 +45,7 @@ export const profileSchema = z.object({
   phone: z.string().trim().refine(isSafaricomMpesa, 'Enter a Safaricom M-Pesa number (07… / 01… / +254)'),
   youtube: z.array(z.string().trim().regex(/^@[\w.-]{2,40}$/)).min(1, 'Select your YouTube account').max(3),
   tiktok: z.array(z.string().trim().regex(/^@[\w.-]{2,40}$/)).min(1, 'Select your TikTok account').max(3),
-  instagram: z.array(z.string().trim().regex(/^@[\w.-]{2,40}$/, 'Enter an Instagram handle starting with @')).max(3),
+  instagram: z.array(z.string().trim().regex(/^@[\w.-]{2,40}$/, 'Enter an Instagram handle starting with @')).min(1, 'Select your Instagram account').max(3),
 });
 export const commentSchema = z.string().trim().max(1000).refine(v => v.split(/\s+/).filter(Boolean).length >= 3, 'Leave a natural comment of at least 3 words.');
 export function validateCashout(amount: number, balance: number, phone: string, opts: { min?: number; accountPhone?: string } = {}) {

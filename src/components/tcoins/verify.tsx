@@ -13,7 +13,7 @@ const at = (h: string) => '@' + h.trim().replace(/^@/, '');
 function Mark({ platform }: { platform: Platform }) { return <span className={`platform-mark platform-${platform.toLowerCase()}`}>{platform === 'YouTube' ? <Play size={12} fill="currentColor"/> : platform === 'TikTok' ? '♪' : '◎'}</span>; }
 
 /** Live account search with avatars; lets the user link up to 3 handles. */
-function HandlePicker({ platform, value, onChange }: { platform: 'YouTube' | 'TikTok'; value: string[]; onChange: (v: string[]) => void }) {
+function HandlePicker({ platform, value, onChange }: { platform: 'YouTube' | 'TikTok' | 'Instagram'; value: string[]; onChange: (v: string[]) => void }) {
   const search = useServerFn(searchAccounts);
   const [query, setQuery] = useState(''); const [results, setResults] = useState<Account[]>([]); const [loading, setLoading] = useState(false); const [searched, setSearched] = useState(false);
   useEffect(() => {
@@ -40,7 +40,7 @@ export function ProfileForm({ close }: { close: () => void }) {
       <label className="form-label">Kenyan phone number<input required value={form.phone} maxLength={13} onChange={e => setForm(v => ({ ...v, phone: e.target.value }))}/></label>
       <HandlePicker platform="YouTube" value={form.youtube} onChange={youtube => setForm(v => ({ ...v, youtube }))}/>
       <HandlePicker platform="TikTok" value={form.tiktok} onChange={tiktok => setForm(v => ({ ...v, tiktok }))}/>
-      <label className="form-label">Instagram handle (optional)<input value={form.instagram[0] ?? ''} maxLength={42} placeholder="@yourname" onChange={e => setForm(v => ({ ...v, instagram: e.target.value.trim() ? [e.target.value.trim()] : [] }))}/></label>
+      <HandlePicker platform="Instagram" value={form.instagram} onChange={instagram => setForm(v => ({ ...v, instagram }))}/>
       {error && <p className="form-error" role="alert">{error}</p>}<Button type="submit">Save profile <Check/></Button>
     </form></>;
 }

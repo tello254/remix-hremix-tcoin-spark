@@ -11,6 +11,7 @@ import {
 import { useEffect, type ReactNode } from "react";
 
 import { TcoinsProvider } from '@/components/tcoins/state';
+import { AuthGate } from '@/components/tcoins/auth';
 import { TcoinsShell } from '@/components/tcoins/app';
 import { Toaster } from '@/components/ui/sonner';
 import appCss from "../styles.css?url";
@@ -124,7 +125,7 @@ function RootComponent() {
   return (
     <QueryClientProvider client={queryClient}>
       {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
-      <TcoinsProvider><TcoinsShell><Outlet /></TcoinsShell></TcoinsProvider><Toaster />
+      <TcoinsProvider><AuthGate><TcoinsShell><Outlet /></TcoinsShell></AuthGate></TcoinsProvider><Toaster />
     </QueryClientProvider>
   );
 }
