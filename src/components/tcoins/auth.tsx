@@ -43,7 +43,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
   }, [session]);
   if (booting) return <Splash label="Starting up" />;
   if (!session) return <AuthScreen />;
-  if (tasking) return <Splash label="Loading Tasks" coin />;
+  if (tasking || !s.hydrated) return <Splash label="Loading Tasks" coin />;
   return <>{children}</>;
 }
 
@@ -73,7 +73,9 @@ function AuthScreen() {
     <div className="auth-card">
       <div className="auth-brand"><span className="brand-mark">T</span><h1>Tcoins.</h1><p>Watch. Engage. Earn. · 10 Tcoins = KSh 1</p></div>
       <div className="auth-tabs">
-        <Button variant="ghost" className="filter-active">{screen === 'signup' ? 'Sign up' : 'Log in'}</Button>
+        {screen === 'forgot'
+          ? <Button variant="ghost" className="filter-active" onClick={() => setScreen('login')}>Back to login</Button>
+          : <Button variant="ghost" className="filter-active">{screen === 'signup' ? 'Sign up' : 'Log in'}</Button>}
       </div>
       {screen === 'forgot' ? <ForgotScreen done={() => setScreen('login')} />
         : screen === 'login' ? <LoginScreen toForgot={() => setScreen('forgot')} /> : <SignupScreen />}

@@ -10,11 +10,13 @@ export const UPLINE_REWARD_FIRST_TASK = 25;
 export const UPLINE_REWARD_FIRST_WITHDRAW = 25;
 export const REFERRAL_TASK_REWARD = 2;
 export const FREE_DAILY_REFERRAL_CAP = 2;
+/** Referral milestone credits per day: Free 2, Pro 5, Premium unlimited. */
+export const referralDailyCap = (t: Tier) => (t === 'Free' ? FREE_DAILY_REFERRAL_CAP : t === 'Pro' ? 5 : Infinity);
 export type Tier = 'Free' | 'Pro' | 'Premium';
 export const TIERS: Record<Tier, { videos: readonly number[]; dailyReward: readonly [number, number]; priceKsh: number; priceCoins: number; unlockTasks: number }> = {
   Free: { videos: [3, 4], dailyReward: [56, 60], priceKsh: 0, priceCoins: 0, unlockTasks: 0 },
-  Pro: { videos: [6, 7], dailyReward: [99, 106], priceKsh: 150, priceCoins: 1500, unlockTasks: 16 },
-  Premium: { videos: [10, 11, 12], dailyReward: [199, 207], priceKsh: 350, priceCoins: 3500, unlockTasks: 40 },
+  Pro: { videos: [6, 7], dailyReward: [120, 120], priceKsh: 150, priceCoins: 1500, unlockTasks: 60 },
+  Premium: { videos: [10, 11, 12], dailyReward: [199, 207], priceKsh: 350, priceCoins: 3500, unlockTasks: 120 },
 };
 export type DailyBatch = { tier: Tier; videoCount: number; reward: number };
 export function createDailyBatch(tier: Tier, random = Math.random): DailyBatch {
@@ -25,7 +27,15 @@ export function createDailyBatch(tier: Tier, random = Math.random): DailyBatch {
 }
 /** Day 1 onboarding: 5 videos unlock 75 Tcoins so 25 welcome + 75 = the 100 Tcoin first cashout. */
 export const createDayOneBatch = (): DailyBatch => ({ tier: 'Free', videoCount: 5, reward: 75 });
-export const canClaimDaily = (batch: DailyBatch, verifiedCount: number, claimed: boolean) => !claimed && verifiedCount >= batch.videoCount;
+/**
+ * The per-video money rule: the day's budget is paid BY THE VIDEO. A user whose linked
+ * platforms can't reach the full plan is paid for exactly the videos they can access —
+ * 60 Tcoins over 4 videos = 15 each, so 3 reachable videos pay 45. This mirrors
+ * fn_generate_batch / fn_complete_task on the server, so preview and production agree.
+ */
+export const scaledDailyReward = (baseReward: number, fullVideos: number, reachableVideos: number) =>
+  Math.max(0, Math.floor((baseReward * Math.max(0, reachableVideos)) / Math.max(1, fullVideos)));
+export const canClaimDaily = (batch: DailyBatch, verifiedCount: number, claimed: boolean) => !claimed && verifiedCount >= batch.videoCount && batch.reward > 0;
 const RANK: Tier[] = ['Free', 'Pro', 'Premium'];
 export const tierRank = (t: Tier) => RANK.indexOf(t);
 /** Highest of the purchased tier and the tier unlocked organically by lifetime tasks. */
@@ -35,17 +45,21 @@ export function effectiveTier(bought: Tier, lifetimeTasks: number): Tier {
 }
 export function nextUtcReset(now = new Date()) { return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1)); }
 export const withdrawalMin = (hasWithdrawn: boolean) => hasWithdrawn ? REGULAR_WITHDRAWAL_MIN : FIRST_WITHDRAWAL_MIN;
-/** Referral Tcoins earned today stay locked until the user's own daily quota is complete. */
-export const withdrawableBalance = (balance: number, referralToday: number, quotaDone: boolean) => Math.max(0, quotaDone ? balance : balance - referralToday);
+/**
+ * Wallet separation: referral Tcoins live in their own wallet and never count toward cashouts.
+ * They enter the main wallet only via "Transfer to main wallet" (earned by finishing today's
+ * tasks) or the automatic 24-hour transfer — after that they're withdrawable like any earnings.
+ */
+export const withdrawableBalance = (balance: number) => Math.max(0, balance);
 export const normalizePhone = (p: string) => p.replace(/\s/g, '').replace(/^(?:\+254|254|0)/, '');
 /** Safaricom (M-Pesa) prefixes only: 070-072, 0740-0748, 0757-0759, 0768-0769, 079, 0110-0115. */
 export const isSafaricomMpesa = (p: string) => /^(?:\+254|254|0)?\d{9}$/.test(p.replace(/\s/g, '')) && /^(?:7(?:[0129]\d|4[0-8]|5[7-9]|6[89])|11[0-5])\d{6}$/.test(normalizePhone(p));
 export const profileSchema = z.object({
   name: z.string().trim().min(2, 'Enter your name').max(60),
-  phone: z.string().trim().refine(isSafaricomMpesa, 'Enter a Safaricom M-Pesa number (07… / 01… / +254)'),
-  youtube: z.array(z.string().trim().regex(/^@[\w.-]{2,40}$/)).min(1, 'Select your YouTube account').max(3),
-  tiktok: z.array(z.string().trim().regex(/^@[\w.-]{2,40}$/)).min(1, 'Select your TikTok account').max(3),
-  instagram: z.array(z.string().trim().regex(/^@[\w.-]{2,40}$/, 'Enter an Instagram handle starting with @')).min(1, 'Select your Instagram account').max(3),
+  phone: z.string().trim().refine(v => v.includes('•') || isSafaricomMpesa(v), 'Enter a Safaricom M-Pesa number (07… / 01… / +254)'),
+  youtube: z.array(z.string().trim().regex(/^@[\w.-]{2,40}$/)).min(1, 'YouTube is required — select your YouTube account').max(3),
+  tiktok: z.array(z.string().trim().regex(/^@[\w.-]{2,40}$/)).max(3),
+  instagram: z.array(z.string().trim().regex(/^@[\w.-]{2,40}$/, 'Enter an Instagram handle starting with @')).max(3),
 });
 export const commentSchema = z.string().trim().max(1000).refine(v => v.split(/\s+/).filter(Boolean).length >= 3, 'Leave a natural comment of at least 3 words.');
 export function validateCashout(amount: number, balance: number, phone: string, opts: { min?: number; accountPhone?: string } = {}) {

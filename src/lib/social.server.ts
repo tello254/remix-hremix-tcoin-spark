@@ -106,16 +106,32 @@ function findAll(obj: any, key: string, acc: any[] = []): any[] {
   if (obj && typeof obj === 'object') { for (const [k, v] of Object.entries(obj)) { if (k === key) acc.push(v); findAll(v, key, acc); } }
   return acc;
 }
+/** Watch-page HTML (900KB) — used only to identify videos whose comment section is silently absent. */
+async function watchHtml(videoId: string) {
+  const res = await fetch(`https://www.youtube.com/watch?v=${videoId}`, { headers: { 'user-agent': UA, 'accept-language': 'en-US,en;q=0.9' } });
+  return res.ok ? res.text() : '';
+}
 
 export async function youtubeComments(url: string, pages = 5): Promise<SocialComment[]> {
   const videoId = youtubeId(url);
   const first = await yt({ videoId });
+  // comments turned off (creator setting or Made-for-Kids): InnerTube returns a messageRenderer instead of a comment section
+  const off = findAll(first, 'messageRenderer')
+    .map((m: any) => [m.text?.simpleText, ...(m.text?.runs ?? []).map((r: any) => r.text)].filter(Boolean).join(' '))
+    .join(' ');
+  if (/comments (are|is) turned off|comments are disabled|turned off.?comments/i.test(off)) throw new Error('YT_COMMENTS_DISABLED');
   // Comments section continuation (works for watch pages and Shorts)
   let token: string | undefined = findAll(first, 'continuationCommand').map(c => c.token).find((t: string) => t) ;
   const sections = findAll(first, 'itemSectionRenderer').find((s: any) => s.sectionIdentifier === 'comment-item-section');
   if (sections) token = findAll(sections, 'continuationCommand')[0]?.token ?? token;
   const panel = findAll(first, 'engagementPanelSectionListRenderer').find((p: any) => String(p.panelIdentifier).includes('comment'));
   if (!sections && panel) token = findAll(panel, 'continuationCommand')[0]?.token ?? token;
+  if (!sections && !panel && !token) {
+    // silent comments-off: the API shows no comment section AND no message (seen on Shorts with
+    // restricted audience settings) — an enabled video always renders the comment shell on the watch page
+    const html = await watchHtml(videoId);
+    if (!/comment-item-section/.test(html)) throw new Error('YT_COMMENTS_DISABLED');
+  }
   const out: SocialComment[] = [];
   for (let i = 0; i < pages && token; i++) {
     const j = await yt({ continuation: token });
