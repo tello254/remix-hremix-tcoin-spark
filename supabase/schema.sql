@@ -5,7 +5,8 @@
 --  Financial & anti-fraud rules enforced at PostgreSQL level.
 --  Documented deviations from the master spec (gaps it left):
 --   • campaigns table          — spec references campaign_id but omits the table
---   • lifetime_tasks increment — done inside fn_complete_task, else organic tiers never unlock
+--   • lifetime_tasks           — kept as a lifetime stat; it no longer decides tiers (Tcoins do)
+--   • organic tier unlock      — 1,000 Tcoins paid by daily batches → Pro, then 1,000+2,400 → Premium
 --   • wallet_ledger.seq        — bigserial tie-break, unambiguous balance ordering
 --   • vault reason 'smart_link'— exempted from the Free 2-milestone daily cap (spec §3C)
 --   • per-user row locks       — FOR UPDATE on profiles inside every money RPC
@@ -30,7 +31,8 @@ create table public.profiles (
   flag_reason text,
   device_id varchar(128),
   created_at timestamptz not null default now()
-  -- tier is NEVER stored: effective_tier() computes from bought_badge + lifetime_tasks
+  -- tier is NEVER stored: effective_tier() computes from bought_badge + Tcoins paid by daily batches
+  -- (referral money and the welcome bonus never move it)
 );
 create index profiles_lifetime_tasks_idx on public.profiles(lifetime_tasks);
 
@@ -54,7 +56,7 @@ create table public.campaigns (
   creator_id uuid references public.profiles(id) on delete set null,
   title text not null check (char_length(title) between 3 and 100),
   url text not null,
-  platform varchar(20) not null check (platform in ('youtube','tiktok','instagram')),
+  platform varchar(20) not null check (platform in ('youtube','tiktok','instagram','e2etest')),
   thumbnail text default '',
   budget_ksh numeric(12,2) not null check (budget_ksh > 0),
   payout_ksh numeric(10,2) not null check (payout_ksh >= 0.1),
@@ -77,6 +79,10 @@ create table public.daily_batches (
   tier_at_batch varchar(20) not null check (tier_at_batch in ('free','pro','premium')),
   video_count int not null check (video_count >= 0),
   daily_reward int not null check (daily_reward >= 0),
+  -- The allocation this batch was minted with. Frozen for the batch's life so the user's own
+  -- progress can never move the open day's target; realignment may only follow the workable pool.
+  plan_video_count int not null default 0 check (plan_video_count >= 0),
+  plan_reward int not null default 0 check (plan_reward >= 0),
   completed_tasks int not null default 0,
   is_claimed boolean not null default false,
   claimed_at timestamptz,
@@ -167,45 +173,44 @@ returns int language sql stable security definer set search_path = public as $$
 $$;
 
 -- ============ helper: effective tier (never stored) ============
--- Organic journey: Pro unlocks at 60 lifetime tasks (payout #16), Premium at 120.
-create or replace function public.effective_tier(p_bought_badge varchar, p_lifetime_tasks int)
+-- Organic journey is measured in COINS PAID BY DAILY BATCHES, never in days/payouts and never in
+-- referral money. Pro unlocks at 1,000 Tcoins of daily-batch rewards; the counter then resets and
+-- Premium unlocks 2,400 Tcoins later (1,000 + 2,400 = 3,400 cumulative).
+create or replace function public.effective_tier(p_bought_badge varchar, p_video_coins int)
 returns varchar(20) language sql immutable as $$
   select case
-    when p_bought_badge = 'premium' or p_lifetime_tasks >= 120 then 'premium'
-    when p_bought_badge = 'pro' or p_lifetime_tasks >= 60 then 'pro'
+    when p_bought_badge = 'premium' or p_video_coins >= 3400 then 'premium'
+    when p_bought_badge = 'pro' or p_video_coins >= 1000 then 'pro'
     else 'free' end
 $$;
 
+-- ============ helper: Tcoins earned from daily batches only ============
+-- The tier yardstick. Referral milestones/commissions, the welcome bonus, badge purchases and
+-- withdrawals never enter this number: a user's tier can only be earned by watching videos.
+create or replace function public.fn_video_coins(p_user uuid)
+returns int language sql stable security definer set search_path = public as $$
+  select coalesce(sum(amount), 0)::int
+    from public.wallet_ledger
+   where user_id = p_user and kind = 'daily_batch'
+$$;
+
 -- ============ helper: journey batch size ============
--- Day 1 = 5 videos. Free journey: 16 Tcoins payouts land exactly on 60 lifetime
--- tasks (random 3/4 days, constrained so payout #16 is always the last).
-create or replace function public.journey_batch_size(p_lifetime_tasks int, p_bought_badge varchar, p_payouts_done int)
+-- Day 1 = 5 videos / 75 Tcoins. After that the size follows the TIER, and the tier follows the
+-- Tcoins actually paid out by daily batches — so a user with one handle simply earns a smaller
+-- daily amount and takes longer, instead of having a "day count" assumption imposed on them.
+-- Free 3-4 (60) · Pro 6-7 (120) · Premium 10-12 (199+).
+create or replace function public.journey_batch_size(p_video_coins int, p_bought_badge varchar, p_payouts_done int)
 returns int language plpgsql as $$
 declare
-  v_tier varchar(20) := public.effective_tier(p_bought_badge, p_lifetime_tasks);
-  v_remaining int := 60 - p_lifetime_tasks;
-  v_grants_after int := 16 - p_payouts_done - 1;   -- grants still to come after the batch being created
-  v_s3 int; v_s4 int;
+  v_tier varchar(20) := public.effective_tier(p_bought_badge, p_video_coins);
 begin
   -- Day 1 onboarding (or a user who skipped every earlier day): 5 videos / 75 Tcoins
-  if p_lifetime_tasks = 0 and p_payouts_done = 0 then
+  if p_video_coins = 0 and p_payouts_done = 0 then
     return 5;
   end if;
-  -- acquired tiers keep their sizes (Pro 6-7, Premium 10-12)
   if v_tier = 'premium' then return 10 + floor(random() * 3)::int; end if;
   if v_tier = 'pro' then return 6 + floor(random() * 2)::int; end if;
-  -- free journey (organic only): 16 payouts land exactly on 60 lifetime tasks
-  if v_remaining <= 0 then return 3; end if;
-  if v_grants_after <= 0 then
-    return least(greatest(v_remaining, 3), 4);     -- final grant: whatever is left (3 or 4 by design)
-  end if;
-  -- feasible sizes keep the rest of the schedule solvable: leftovers must fit grants_after x [3,4]
-  v_s3 := case when v_remaining - 3 between 3 * v_grants_after and 4 * v_grants_after then 1 else 0 end;
-  v_s4 := case when v_remaining - 4 between 3 * v_grants_after and 4 * v_grants_after then 1 else 0 end;
-  return case
-    when v_s4 = 1 and (v_s3 = 0 or random() < 0.5) then 4
-    when v_s3 = 1 then 3
-    else least(greatest(v_remaining, 3), 4) end;
+  return 3 + floor(random() * 2)::int;              -- free: 3 or 4 videos
 end $$;
 
 -- ============ helper: today's UTC date (Supabase server runs UTC) ============
@@ -230,6 +235,7 @@ declare
   v_payouts int;
   v_bal int;
   v_size int;
+  v_base int;
   v_elig int;
 begin
   -- serialize progress + money for this user
@@ -264,15 +270,17 @@ begin
   if not found then
     select count(*) into v_payouts
       from public.daily_batches where user_id = p_user and is_claimed and date_utc < today_utc();
-    v_size := journey_batch_size(ctx.lifetime_tasks, ctx.bought_badge, v_payouts);
+    v_size := journey_batch_size(public.fn_video_coins(p_user), ctx.bought_badge, v_payouts);
+    v_base := fn_daily_budget(public.fn_video_coins(p_user), ctx.bought_badge, v_payouts);
     v_elig := fn_eligible_pool(p_user);
-    insert into public.daily_batches (user_id, date_utc, tier_at_batch, video_count, daily_reward)
+    insert into public.daily_batches
+        (user_id, date_utc, tier_at_batch, video_count, daily_reward, plan_video_count, plan_reward)
       values (p_user, today_utc(),
-              effective_tier(ctx.bought_badge, ctx.lifetime_tasks),
+              effective_tier(ctx.bought_badge, public.fn_video_coins(p_user)),
               least(v_size, v_elig),
               case when v_elig <= 0 then 0
-                   else greatest(floor(fn_daily_budget(ctx.lifetime_tasks, ctx.bought_badge, v_payouts)::numeric
-                              * least(v_size, v_elig) / v_size)::int, 1) end)
+                   else greatest(floor(v_base::numeric * least(v_size, v_elig) / v_size)::int, 1) end,
+              v_size, v_base)          -- minted allocation, frozen for the life of this batch
       on conflict (user_id, date_utc) do update set user_id = excluded.user_id
       returning * into v_batch;
   end if;
@@ -374,8 +382,9 @@ declare
   ctx public.profiles%ROWTYPE;
   v_batch public.daily_batches%ROWTYPE;
   v_bal int;
-  v_payouts int;
+  v_coins int;
   v_pro boolean := false;
+  v_premium boolean := false;
 begin
   select * into ctx from public.profiles where id = p_user for update;
   if not found then
@@ -403,16 +412,6 @@ begin
 
   update public.daily_batches set is_claimed = true, claimed_at = now() where id = v_batch.id;
 
-  -- journey milestone: 16 payouts earned and 60+ lifetime tasks -> organic Pro badge
-  if ctx.bought_badge = 'none' then
-    select count(*) into v_payouts
-      from public.daily_batches where user_id = p_user and is_claimed;
-    if v_payouts >= 16 and ctx.lifetime_tasks >= 60 then
-      update public.profiles set bought_badge = 'pro' where id = p_user;
-      v_pro := true;
-    end if;
-  end if;
-
   perform public.fn_sweep_referral_vault(p_user);   -- anything 24h+ in the vault has auto-landed before this claim
 
   v_bal := current_balance(p_user);
@@ -420,10 +419,23 @@ begin
     values (p_user, 'daily_batch', v_batch.daily_reward, v_bal + v_batch.daily_reward, v_batch.id::text,
             v_batch.video_count::text || ' verified tasks · daily batch');
 
+  -- Tier milestones are measured ONLY by Tcoins this user has actually been paid by daily batches
+  -- (the row just inserted included). Referral money never counts: Pro at 1,000, then the counter
+  -- resets and Premium unlocks 2,400 later (3,400 cumulative).
+  v_coins := public.fn_video_coins(p_user);
+  if v_coins >= 3400 and ctx.bought_badge <> 'premium' then
+    update public.profiles set bought_badge = 'premium' where id = p_user;
+    v_premium := true;
+  elsif v_coins >= 1000 and ctx.bought_badge = 'none' then
+    update public.profiles set bought_badge = 'pro' where id = p_user;
+    v_pro := true;
+  end if;
+
   -- referral coins live in their own wallet now: manual "Transfer to main wallet" or the 24h auto-sweep
   return jsonb_build_object('ok', true, 'coins_paid', v_batch.daily_reward,
                             'balance_after', v_bal + v_batch.daily_reward,
-                            'pro_awarded', v_pro);
+                            'video_coins', v_coins,
+                            'pro_awarded', v_pro, 'premium_awarded', v_premium);
 end $$;
 
 -- ============ fn_transfer_referral_vault — move the referral wallet into the main wallet (quota-gated) ============
@@ -444,11 +456,15 @@ begin
   if coalesce(v_total, 0) <= 0 then
     return jsonb_build_object('ok', false, 'error', 'empty_vault');
   end if;
-  -- the transfer privilege is earned by finishing today's tasks
+  -- the transfer privilege is earned by finishing AND collecting today's daily batch:
+  -- quota first, then the claim — once "Claim daily reward" pays, referral coins may move
   select * into v_batch from public.daily_batches
     where user_id = p_user and date_utc = today_utc() for update;
   if not found or v_batch.completed_tasks < v_batch.video_count then
     return jsonb_build_object('ok', false, 'error', 'quota_incomplete');
+  end if;
+  if not v_batch.is_claimed then
+    return jsonb_build_object('ok', false, 'error', 'pending_claim');
   end if;
   v_bal := current_balance(p_user);
   insert into public.wallet_ledger (user_id, kind, amount, balance_after, description)
@@ -718,14 +734,14 @@ language sql security definer set search_path = public stable as $$
       and not exists (select 1 from public.task_completions t where t.user_id = p_user and t.campaign_id = c.id)
 $$;
 
--- fn_daily_budget: the day's gross budget by journey position (70/75 day-one, tier rewards).
+-- fn_daily_budget: the day's gross budget by tier (75 day-one, then 60/120/199+).
 -- Rewards are PAID BY THE VIDEO: 60 over 4 videos = 15 each, so 3 reachable videos pay 45.
-create or replace function public.fn_daily_budget(p_lifetime_tasks int, p_bought_badge varchar, p_payouts_done int)
+create or replace function public.fn_daily_budget(p_video_coins int, p_bought_badge varchar, p_payouts_done int)
 returns int
 language plpgsql as $$
 begin
-  if p_lifetime_tasks = 0 and p_payouts_done = 0 then return 75; end if;
-  case effective_tier(p_bought_badge, p_lifetime_tasks)
+  if p_video_coins = 0 and p_payouts_done = 0 then return 75; end if;
+  case effective_tier(p_bought_badge, p_video_coins)
     when 'premium' then return 199 + floor(random() * 9)::int;
     when 'pro' then return 120;
     else return 60;
@@ -748,6 +764,9 @@ declare
   v_size int;
   v_base int;
   v_elig int;
+  v_target int;
+  v_reward int;
+  v_grew boolean := false;
 begin
   select * into ctx from public.profiles where id = p_user for update;
   if not found then
@@ -757,7 +776,33 @@ begin
   select * into v_batch from public.daily_batches
     where user_id = p_user and date_utc = today_utc() for update;
   if found then
+    -- Live fair-share realignment of the open day (see supabase/delta-expand.sql header):
+    -- the open day always reflects the videos that are actually workable right now, capped at the
+    -- allocation the batch was MINTED with; floored at completed_tasks; claimed batches never move.
+    -- The minted allocation is frozen in plan_video_count/plan_reward, so the user's own progress
+    -- can never move the target: finishing a video banks it (greyed on the dashboard) but never
+    -- resizes the day. Only paused/removed campaigns the batch has not consumed yet can pull the
+    -- quota down; newly launched campaigns grow it back up, never past the minted plan.
+    if not v_batch.is_claimed then
+      v_size := v_batch.plan_video_count;
+      v_base := v_batch.plan_reward;
+      v_elig := fn_eligible_pool(p_user) + (
+        select count(*)::int from public.task_completions where batch_id = v_batch.id
+      );                                                                  -- the batch's own finished work stays counted
+      v_target := greatest(least(v_size, v_elig), v_batch.completed_tasks);  -- finished work always counts
+      if v_target <> v_batch.video_count then
+        v_reward := case when v_target <= 0 then 0
+                         else greatest(floor(v_base::numeric * v_target / nullif(v_size, 0))::int, 1) end;
+        update public.daily_batches
+          set video_count = v_target,
+              daily_reward = v_reward
+          where id = v_batch.id
+          returning * into v_batch;
+        v_grew := true;
+      end if;
+    end if;
     return jsonb_build_object('ok', true, 'batch_id', v_batch.id, 'already_existed', true,
+                              'realigned', v_grew,
                               'video_count', v_batch.video_count, 'reward', v_batch.daily_reward,
                               'completed_tasks', v_batch.completed_tasks, 'is_claimed', v_batch.is_claimed);
   end if;
@@ -768,15 +813,17 @@ begin
   select count(*) into v_payouts
     from public.daily_batches where user_id = p_user and is_claimed and date_utc < today_utc();
 
-  v_tier := effective_tier(ctx.bought_badge, ctx.lifetime_tasks);
-  v_size := journey_batch_size(ctx.lifetime_tasks, ctx.bought_badge, v_payouts);
-  v_base := fn_daily_budget(ctx.lifetime_tasks, ctx.bought_badge, v_payouts);
+  v_tier := effective_tier(ctx.bought_badge, public.fn_video_coins(p_user));
+  v_size := journey_batch_size(public.fn_video_coins(p_user), ctx.bought_badge, v_payouts);
+  v_base := fn_daily_budget(public.fn_video_coins(p_user), ctx.bought_badge, v_payouts);
   v_elig := fn_eligible_pool(p_user);
-  insert into public.daily_batches (user_id, date_utc, tier_at_batch, video_count, daily_reward)
+  insert into public.daily_batches
+      (user_id, date_utc, tier_at_batch, video_count, daily_reward, plan_video_count, plan_reward)
     values (p_user, today_utc(), v_tier,
             least(v_size, v_elig),                     -- only as many tasks as linked platforms allow
             case when v_elig <= 0 then 0                 -- nothing reachable: an empty, honest day
-                 else greatest(floor(v_base::numeric * least(v_size, v_elig) / v_size)::int, 1) end)
+                 else greatest(floor(v_base::numeric * least(v_size, v_elig) / v_size)::int, 1) end,
+            v_size, v_base)                            -- minted allocation, frozen for the day
     returning * into v_batch;
 
   return jsonb_build_object('ok', true, 'batch_id', v_batch.id, 'already_existed', false,
@@ -789,13 +836,15 @@ create view public.v_withdrawn_totals as
   select user_id, coalesce(sum(amount_ksh), 0) as total_withdrawn_ksh
     from public.withdrawals where status = 'completed' group by user_id;
 
-create view public.v_badge_progress as
-  select id as user_id, lifetime_tasks,
-         case when lifetime_tasks < 60 then 60 - lifetime_tasks
-              when lifetime_tasks < 120 then 120 - lifetime_tasks else 0 end as tasks_to_next_badge,
-         case when lifetime_tasks < 60 then 'pro'
-              when lifetime_tasks < 120 then 'premium' else 'max_tier' end as next_badge_target
-    from public.profiles;
+create or replace view public.v_badge_progress as
+  select p.id as user_id, p.lifetime_tasks,
+         public.fn_video_coins(p.id) as video_coins,
+         greatest(0, (case when public.fn_video_coins(p.id) < 1000 then 1000
+                          when public.fn_video_coins(p.id) < 3400 then 3400
+                          else public.fn_video_coins(p.id) end) - public.fn_video_coins(p.id)) as coins_to_next_badge,
+         case when public.fn_video_coins(p.id) < 1000 then 'pro'
+              when public.fn_video_coins(p.id) < 3400 then 'premium' else 'max_tier' end as next_badge_target
+    from public.profiles p;
 
 create view public.v_today_goal as
   select user_id, video_count as daily_goal_videos, completed_tasks as current_videos_completed,

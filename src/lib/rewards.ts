@@ -12,11 +12,19 @@ export const REFERRAL_TASK_REWARD = 2;
 export const FREE_DAILY_REFERRAL_CAP = 2;
 /** Referral milestone credits per day: Free 2, Pro 5, Premium unlimited. */
 export const referralDailyCap = (t: Tier) => (t === 'Free' ? FREE_DAILY_REFERRAL_CAP : t === 'Pro' ? 5 : Infinity);
+/**
+ * Organic tier thresholds, measured ONLY in Tcoins paid out by daily batches (never referral
+ * money, never the welcome bonus). Pro at 1,000; the counter then resets and Premium unlocks
+ * 2,400 later — 3,400 cumulative.
+ */
+export const PRO_UNLOCK_COINS = 1000;
+export const PREMIUM_STEP_COINS = 2400;
+export const PREMIUM_UNLOCK_COINS = PRO_UNLOCK_COINS + PREMIUM_STEP_COINS;
 export type Tier = 'Free' | 'Pro' | 'Premium';
-export const TIERS: Record<Tier, { videos: readonly number[]; dailyReward: readonly [number, number]; priceKsh: number; priceCoins: number; unlockTasks: number }> = {
-  Free: { videos: [3, 4], dailyReward: [56, 60], priceKsh: 0, priceCoins: 0, unlockTasks: 0 },
-  Pro: { videos: [6, 7], dailyReward: [120, 120], priceKsh: 150, priceCoins: 1500, unlockTasks: 60 },
-  Premium: { videos: [10, 11, 12], dailyReward: [199, 207], priceKsh: 350, priceCoins: 3500, unlockTasks: 120 },
+export const TIERS: Record<Tier, { videos: readonly number[]; dailyReward: readonly [number, number]; priceKsh: number; priceCoins: number; unlockCoins: number }> = {
+  Free: { videos: [3, 4], dailyReward: [56, 60], priceKsh: 0, priceCoins: 0, unlockCoins: 0 },
+  Pro: { videos: [6, 7], dailyReward: [120, 120], priceKsh: 150, priceCoins: 1500, unlockCoins: PRO_UNLOCK_COINS },
+  Premium: { videos: [10, 11, 12], dailyReward: [199, 207], priceKsh: 350, priceCoins: 3500, unlockCoins: PREMIUM_UNLOCK_COINS },
 };
 export type DailyBatch = { tier: Tier; videoCount: number; reward: number };
 export function createDailyBatch(tier: Tier, random = Math.random): DailyBatch {
@@ -38,9 +46,9 @@ export const scaledDailyReward = (baseReward: number, fullVideos: number, reacha
 export const canClaimDaily = (batch: DailyBatch, verifiedCount: number, claimed: boolean) => !claimed && verifiedCount >= batch.videoCount && batch.reward > 0;
 const RANK: Tier[] = ['Free', 'Pro', 'Premium'];
 export const tierRank = (t: Tier) => RANK.indexOf(t);
-/** Highest of the purchased tier and the tier unlocked organically by lifetime tasks. */
-export function effectiveTier(bought: Tier, lifetimeTasks: number): Tier {
-  const organic: Tier = lifetimeTasks >= TIERS.Premium.unlockTasks ? 'Premium' : lifetimeTasks >= TIERS.Pro.unlockTasks ? 'Pro' : 'Free';
+/** Highest of the purchased tier and the tier unlocked organically by daily-batch Tcoins. */
+export function effectiveTier(bought: Tier, videoCoins: number): Tier {
+  const organic: Tier = videoCoins >= TIERS.Premium.unlockCoins ? 'Premium' : videoCoins >= TIERS.Pro.unlockCoins ? 'Pro' : 'Free';
   return tierRank(organic) > tierRank(bought) ? organic : bought;
 }
 export function nextUtcReset(now = new Date()) { return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1)); }

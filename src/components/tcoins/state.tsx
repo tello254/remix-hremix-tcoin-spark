@@ -1,8 +1,7 @@
 import { createContext, useContext, useEffect, useRef, useState, type Context, type ReactNode } from 'react';
-import one from '@/assets/task-1.jpg';
 import { toast } from 'sonner';
-import { campaignSlots, canClaimDaily, createDailyBatch, createDayOneBatch, effectiveTier, referralDailyCap, REFERRAL_TASK_REWARD, TIERS, tierRank, UPLINE_REWARD_FIRST_TASK, UPLINE_REWARD_FIRST_WITHDRAW, WELCOME_BONUS, withdrawableBalance, withdrawalMin, type DailyBatch, type Tier } from '@/lib/rewards';
-import { supabase } from '@/lib/supabase';
+import { campaignSlots, canClaimDaily, createDailyBatch, createDayOneBatch, effectiveTier, referralDailyCap, REFERRAL_TASK_REWARD, tierRank, UPLINE_REWARD_FIRST_TASK, UPLINE_REWARD_FIRST_WITHDRAW, WELCOME_BONUS, withdrawableBalance, withdrawalMin, type DailyBatch, type Tier } from '@/lib/rewards';
+import { authUser, supabase } from '@/lib/supabase';
 import { rowToCampaign, type CampaignRow } from '@/lib/creator.functions';
 
 export type Platform = 'YouTube' | 'TikTok' | 'Instagram';
@@ -32,13 +31,16 @@ function useStore() {
   const [profile, setProfile] = useState<Profile>({ name: 'Guest', phone: '07•• ••• •••', youtube: [], tiktok: [], instagram: [] });
   const [boughtTier, setBoughtTier] = useState<Tier>('Free');
   const [lifetimeTasks, setLifetimeTasks] = useState(11);
-  const tier = effectiveTier(boughtTier, lifetimeTasks);
+  /** Tcoins the user has been PAID by daily batches — the only thing that unlocks tiers.
+   *  Referral money, the welcome bonus and badge purchases never count toward it. */
+  const [videoCoins, setVideoCoins] = useState(0);
+  const tier = effectiveTier(boughtTier, videoCoins);
   const [batch, setBatch] = useState<DailyBatch>({ tier: 'Free', videoCount: 3, reward: 60 });
   const dailyLimit = batch.videoCount;
   const [batchVersion, setBatchVersion] = useState(0);
   const dayRef = useRef('');
   const completedRef = useRef(new Set<string>());
-  const completedIdsRef = useRef(new Set<string>());   // every campaign id this user has EVER completed — never offered again
+  const completedIdsRef = useRef(new Set<string>());   // forever-done ids: prior-day completions + claimed-batch work — never offered again. TODAY's open-batch work is NOT here (stays visible, greyed, until the claim).
   const claimRef = useRef(false);
   const [campaigns, setCampaigns] = useState(initialCampaigns);
   useEffect(() => { dayRef.current = new Date().toISOString().slice(0, 10); setBatch(createDayOneBatch()); setCampaigns(v => [...v].sort(() => Math.random() - 0.5)); }, []);
@@ -48,9 +50,10 @@ function useStore() {
   const [welcomeClaimed, setWelcomeClaimed] = useState(false);   // balance shows 0 until the banner's Claim is pressed
   const [claimingWelcome, setClaimingWelcome] = useState(false);
   const [coinSplash, setCoinSplash] = useState(0);               // increments → header coin pill plays its splash
+  const [welcomeTick, setWelcomeTick] = useState(0);             // increments → coins fly from the welcome banner to the balance pill
   const [streak, setStreak] = useState(3);                       // preview shows the demo streak; authed users get the real one
   const [weekEarned, setWeekEarned] = useState(180);             // earned in the last 7 days (real from the ledger when authed)
-  const [payoutsDone, setPayoutsDone] = useState(0);             // Tcoins payouts banked — journey to the organic Pro badge
+  const [payoutsDone, setPayoutsDone] = useState(0);             // daily batches banked (stat)
   const [hasWithdrawn, setHasWithdrawn] = useState(false);
   const [uplinePaid, setUplinePaid] = useState(false);
   const [friends, setFriends] = useState(initialFriends);
@@ -94,7 +97,7 @@ function useStore() {
     let ledger: { id: string; kind: string; amount: number; balance_after: number; reference_id: string | null; description: string | null; created_at: string }[] = [];
     let campRows: CampaignRow[] | null = null;
     let myRefs: { referee_name: string; stage: number; tasks_completed: number; total_earned: number }[] | null = null;
-    let comps: { campaign_id: string }[] = [];
+    let comps: { campaign_id: string; daily_batches: { date_utc: string; is_claimed: boolean } }[] = [];
     try {
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
@@ -106,7 +109,7 @@ function useStore() {
             supabase.from('wallet_ledger').select('id, kind, amount, balance_after, reference_id, description, created_at').eq('user_id', userId).order('seq', { ascending: false }),
             supabase.from('campaigns').select('id, title, url, platform, thumbnail, budget_ksh, payout_ksh, access_code, instruction, duration, slots, completed, creator_name').eq('active', true).order('created_at', { ascending: false }).limit(50),
             supabase.rpc('fn_my_referrals', { p_user: userId }),
-            supabase.from('task_completions').select('campaign_id'),   // RLS: own rows only — every campaign this user has ever done
+            supabase.from('task_completions').select('campaign_id, daily_batches!inner(date_utc, is_claimed)'),   // RLS: own rows only — mapped to the owning batch so done-today can be told apart from done-forever
           ]);
           if (p.error) throw p.error;
           prof = p.data; handles = h.data ?? []; ledger = l.data ?? []; campRows = c.data; myRefs = r.data; comps = cp.data ?? [];
@@ -121,17 +124,25 @@ function useStore() {
       await supabase.auth.signOut();
       return;
     }
-      // the all-time completion ledger: a task done once can never reappear for this user
-      completedIdsRef.current = new Set(comps.map(x => x.campaign_id));
-      // creator-launched campaigns (creator studio) ARE the task pool — no scraping, pur et dur
+      // the done-work ledger, split by day: prior-day completions and anything inside an already
+      // CLAIMED batch are forever-done (their videos can never be offered again); completions made
+      // TODAY inside the still-open batch stay in the pool as greyed cards until the claim — so a
+      // morning batch keeps its size and reward, whether you finish it at once or spread over the day
+      const todayUtc = new Date().toISOString().slice(0, 10);
+      completedIdsRef.current = new Set(comps.filter(x => x.daily_batches?.date_utc !== todayUtc || x.daily_batches?.is_claimed).map(x => x.campaign_id));
+      // creator-launched campaigns (creator studio) ARE the task pool — no scraping, pur et dur.
+      // The 'e2etest' platform belongs to the verify suite's throwaway campaigns — never renderable.
       if (campRows?.length) {
-        const pool = campRows.map(r => rowToCampaign(r as CampaignRow))
-          .filter(x => !completedIdsRef.current.has(x.id))   // forever-done videos leave the pool at every load
-          .map(c => ({ ...c, thumbnail: c.thumbnail || one }));
+        const pool = campRows.filter(r => ['youtube', 'tiktok', 'instagram'].includes(String(r.platform).toLowerCase()))
+          .map(r => rowToCampaign(r as CampaignRow))
+          .filter(x => !completedIdsRef.current.has(x.id))   // forever-done videos leave the pool at every load; today's open-batch work stays, greyed
+          // no image → the clean platform tile (thumb-none), the same everywhere;
+          // never substitute stock/AI artwork for a video the creator didn't provide
+          .map(c => ({ ...c, thumbnail: c.thumbnail }));
         setCampaigns(pool);
       }
       if (prof) {
-        setProfile({          name: prof.username,
+        setProfile({          name: prof.username.charAt(0).toUpperCase() + prof.username.slice(1),   // display-name rule: 'janes' reads 'Janes' everywhere
           phone: prof.phone_number,
           youtube: (handles || []).filter(h => h.platform === 'youtube').map(h => h.handle),
           tiktok: (handles || []).filter(h => h.platform === 'tiktok').map(h => h.handle),
@@ -139,6 +150,8 @@ function useStore() {
         });
         setBoughtTier(prof.bought_badge === 'premium' ? 'Premium' : prof.bought_badge === 'pro' ? 'Pro' : 'Free');
         setLifetimeTasks(prof.lifetime_tasks ?? 0);
+        // tier progress = daily-batch payouts only (never referrals/welcome bonus)
+        setVideoCoins((ledger ?? []).filter(r => r.kind === 'daily_batch').reduce((a, r) => a + (r.amount ?? 0), 0));
         setHasWithdrawn(!!prof.has_withdrawn);
       }
       // wallet = last balance_after in the immutable ledger (never a stored balance)
@@ -171,7 +184,7 @@ function useStore() {
       let n = 0;
       if (anchor) for (let d = new Date(anchor + 'T00:00:00Z'); daySet.has(d.toISOString().slice(0, 10)); d = new Date(d.getTime() - 864e5)) n++;
       setStreak(n);
-      // journey counter: every claimed daily batch is one Tcoins payout (16 unlock the organic Pro badge)
+      // payouts banked (stat only — the tier yardstick is the Tcoins those payouts were worth)
       setPayoutsDone((ledger || []).filter(r => r.kind === 'daily_batch').length);
       // referral wallet: coins earned from friends live separately until transferred (or 24h auto-transfer)
       const { data: vaultRow } = await supabase.rpc('fn_referral_vault', { p_user: userId });
@@ -179,7 +192,10 @@ function useStore() {
       if (!prof) { await supabase.auth.signOut(); return; }   // session without a profile row — not a real account
       setHydrated(true);
     };
-    const refresh = async () => { const { data: { user } } = await supabase.auth.getUser(); if (user) { setAuthed(true); const p = on(user.id, false); hydrateRef.current = p; await p; } };
+    const refresh = async () => {
+      const user = await authUser();   // self-heals a token the server sees as expired (device clock drift)
+      if (user) { setAuthed(true); const p = on(user.id, false); hydrateRef.current = p; await p; }
+    };
     refresh();
     return supabase.auth.onAuthStateChange((evt, sess) => {
       if (evt === 'SIGNED_OUT') { on('', true); return; }
@@ -191,7 +207,7 @@ function useStore() {
    * (behind the "Loading Tasks" overlay) and generates/fetches today's frozen batch.
    */
   const assignTasks = async () => {
-    const { data: { user } } = await supabase.auth.getUser();
+    const user = await authUser();   // refreshes once if the server sees the token as expired
     if (!user || assignRef.current) return;
     assignRef.current = true;
     try {
@@ -208,7 +224,7 @@ function useStore() {
       setDone([]); setPassed(0);
       completedRef.current.clear();
       if (b?.ok) {
-        const t: Tier = effectiveTier(boughtTier, lifetimeTasks);
+        const t: Tier = effectiveTier(boughtTier, videoCoins);
         setBatch({ tier: t, videoCount: b.video_count ?? createDayOneBatch().videoCount, reward: b.reward ?? createDayOneBatch().reward });
         // restore today's REAL progress by ID — from task_completions; no filtering against the (possibly
         // still-loading) pool: an id without a matching card simply renders nothing until the pool lands
@@ -233,15 +249,16 @@ function useStore() {
   const claimWelcome = () => {
     if (welcomeClaimed || claimingWelcome) return;
     setClaimingWelcome(true);
+    setWelcomeTick(v => v + 1);   // launch the coin flight from the live banner button before it unmounts
     const finish = (bal?: number) => {
       setBalance(b => bal ?? b + WELCOME_BONUS);
       setWelcomeClaimed(true);
       addEntry({ label: 'Welcome bonus', detail: 'Thanks for joining Tcoins', coins: WELCOME_BONUS, kind: 'bonus' });
-      setCoinSplash(v => v + 1);   // header coin pill splash
+      setTimeout(() => setCoinSplash(v => v + 1), 1000);   // pill pops when the coins land, same rhythm as the daily claim
       setClaimingWelcome(false);
     };
     if (authed) {
-      supabase.auth.getUser().then(async ({ data: { user } }) => {
+      authUser().then(async (user) => {
         if (!user) { setClaimingWelcome(false); return; }
         const { data: r } = await supabase.rpc('fn_claim_welcome', { p_user: user.id });
         const j = r as { ok: boolean; balance_after?: number; error?: string } | null;
@@ -258,7 +275,9 @@ function useStore() {
     const campaign = campaigns.find(c => c.id === id);
     if (!ok || !campaign || !campaigns.slice(0, dailyLimit).some(c => c.id === id) || completedRef.current.has(id) || campaign.completed >= campaign.slots || completedRef.current.size >= dailyLimit) return false;
     completedRef.current.add(id);
-    completedIdsRef.current.add(id);   // lifelong: this campaign can never reappear for this account
+    // TODAY's completion is batch-scoped, not lifelong: the video stays on the dashboard (greyed)
+    // until the daily reward is claimed. Only AFTER the claim does it join the forever-done set
+    // (claim path below / next-day hydrate) — never earnable twice.
     setDone(v => [...v, id]);
     if (ok) {
       setPassed(v => v + 1); setLifetimeTasks(v => v + 1);
@@ -277,27 +296,35 @@ function useStore() {
   const claimDaily = () => {
     if (!canClaimDaily(batch, completedRef.current.size, claimRef.current)) return 0;
     claimRef.current = true; setClaimed(true);
+    setClaimTick(v => v + 1);   // coins fly + ring burst LAUNCH at the click — the neon claim button unmounts with the claimed flag, so the flight must grab its anchor now
     if (authed) {
       // Real claim: server-side all-or-nothing (fn_claim_daily_batch) — referral coins stay vaulted.
-      supabase.auth.getUser().then(async ({ data: { user } }) => {
+      authUser().then(async (user) => {
         if (!user) return;
         const { data: r } = await supabase.rpc('fn_claim_daily_batch', { p_user: user.id });
-        const j = r as { ok: boolean; coins_paid?: number; balance_after?: number; pro_awarded?: boolean; error?: string } | null;
+        const j = r as { ok: boolean; coins_paid?: number; balance_after?: number; video_coins?: number; pro_awarded?: boolean; premium_awarded?: boolean; error?: string } | null;
         if (j?.ok) {
+          // the claimed day is money-complete NOW: verified cards leave the board immediately and
+          // their ids join the forever-done set (the next hydrate recomputes the same from the DB)
+          completedRef.current.forEach(id => completedIdsRef.current.add(id));
+          setCampaigns(v => v.filter(c => !completedRef.current.has(c.id)));
           setBalance(j.balance_after ?? 0);
-          setPayoutsDone(v => v + 1);   // another Tcoins payout banked on the journey to Pro
+          if (typeof j.video_coins === 'number') setVideoCoins(j.video_coins);
+          else setVideoCoins(v => v + (j.coins_paid ?? 0));
+          setPayoutsDone(v => v + 1);   // another daily payout banked
           setWeekEarned(v => v + (batch.reward ?? 0));
           setStreak(v => v + 1);   // today joined the streak (ledger anchor moves to today)
           setTimeout(() => setCoinSplash(v => v + 1), 1000);   // the pill pops only when the coins actually ARRIVE
-          setClaimTick(v => v + 1);   // ring burst + coin flight start together, immediately
           addEntry({ label: 'Daily tasks reward', detail: `${dailyLimit} verified tasks · Complete daily batch`, coins: batch.reward, kind: 'task' });
           toast.success(`${j.coins_paid} Tcoins collected — daily batch complete! 🎉`);
-          if (j.pro_awarded) { setBoughtTier('Pro'); toast.success('Pro badge unlocked — 16 payouts banked. Higher daily rewards are live!'); }
+          if (j.premium_awarded) { setBoughtTier('Premium'); toast.success('Premium badge unlocked — 3,400 Tcoins earned from videos. Highest daily rewards are live!'); }
+          else if (j.pro_awarded) { setBoughtTier('Pro'); toast.success('Pro badge unlocked — 1,000 Tcoins earned from videos. Higher daily rewards are live!'); }
         } else { setClaimed(false); claimRef.current = false; toast.error(j?.error === 'batch_incomplete' ? 'Finish every assigned video first.' : 'Could not collect right now.'); }
       });
       return batch.reward;
     }
     setBalance(v => v + batch.reward);
+    setVideoCoins(v => v + batch.reward);
     setClaimTick(v => v + 1);
     setTimeout(() => setCoinSplash(v => v + 1), 1000);   // preview: pill pops when the coins arrive, same as the real path
     addEntry({ label: 'Daily tasks reward', detail: `${dailyLimit} verified tasks · Complete daily batch`, coins: batch.reward, kind: 'task' });
@@ -308,7 +335,7 @@ function useStore() {
   const transferReferral = () => {
     if (!(referralVault > 0)) return;
     if (authed) {
-      supabase.auth.getUser().then(async ({ data: { user } }) => {
+      authUser().then(async (user) => {
         if (!user) return;
         const { data: r } = await supabase.rpc('fn_transfer_referral_vault', { p_user: user.id });
         const j = r as { ok: boolean; coins?: number; balance_after?: number; error?: string } | null;
@@ -320,7 +347,7 @@ function useStore() {
             addEntry({ label: 'Referral rewards transferred', detail: 'Referral wallet → available balance', coins: j.coins, kind: 'referral' });
             toast.success(`${j.coins} referral Tcoins moved to your main wallet.`);
           }
-        } else toast.error(j?.error === 'quota_incomplete' ? 'Finish today’s tasks to transfer referral coins.' : 'Could not transfer right now.');
+        } else toast.error(j?.error === 'quota_incomplete' ? 'Finish today’s tasks to transfer referral coins.' : j?.error === 'pending_claim' ? 'Claim your daily reward first — referral coins transfer after the claim.' : 'Could not transfer right now.');
       });
       return;
     }
@@ -335,7 +362,7 @@ function useStore() {
   const withdraw = (coins: number, method: string, receipt: string) => {
     if (authed) {
       // Real debit: atomic ledger hold on the coins while M-Pesa B2C is pending (fn_request_withdrawal).
-      supabase.auth.getUser().then(async ({ data: { user } }) => {
+      authUser().then(async (user) => {
         if (!user) return;
         const { data: r } = await supabase.rpc('fn_request_withdrawal', { p_user: user.id, p_amount: coins });
         const j = r as { ok: boolean; withdrawal_id?: string; balance_after?: number; error?: string; minimum?: number } | null;
@@ -362,7 +389,7 @@ function useStore() {
       if (simBusy) return;
       const f = friends.find(x => x.name === name);
       setSimBusy(true);
-      supabase.auth.getUser().then(async ({ data: { user } }) => {
+      authUser().then(async (user) => {
         if (!user) { setSimBusy(false); return; }
         const { data: r } = await supabase.rpc('fn_simulate_referral', { p_user: user.id, p_referral_id: f?.id ?? null });
         const j = r as { ok: boolean; kind?: 'first_task' | 'first_withdraw' | 'task'; coins?: number; balance_after?: number; vault_total?: number; stage?: number; tasks_completed?: number; total_earned?: number; referral_id?: string; referee_name?: string; error?: string } | null;
@@ -389,17 +416,10 @@ function useStore() {
     else setBalance(v => v + coins);                                                              // commission → main balance
     addEntry({ label: isMilestone ? 'Referral milestone' : 'Referral commission', detail: `${name.split(' ')[0]} ${label}`, coins, kind: 'referral' });
   };
-  /** Buys a badge with Tcoins (deducted) or simulated M-Pesa. */
-  const buyTier = (t: Tier, method: 'mpesa' | 'coins') => {
-    if (tierRank(t) <= tierRank(tier)) return 'You already have this badge.';
-    if (method === 'coins') { if (balance < TIERS[t].priceCoins) return `You need ${TIERS[t].priceCoins.toLocaleString()} Tcoins.`; setBalance(v => v - TIERS[t].priceCoins); addEntry({ label: `${t} badge`, detail: 'Paid with Tcoins', coins: -TIERS[t].priceCoins, kind: 'badge' }); }
-    else addEntry({ label: `${t} badge`, detail: `KSH ${TIERS[t].priceKsh} · M-Pesa (simulated)`, coins: 0, kind: 'badge' });
-    setBoughtTier(t); return null;
-  };
   /** 00:00 UTC rollover: unfinished tasks are pulled, nothing carries over. */
   const rollDay = () => { dayRef.current = new Date().toISOString().slice(0, 10); completedRef.current.clear(); claimRef.current = false; setBatch(createDailyBatch(tier)); setBatchVersion(v => v + 1); setCampaigns(v => igLast([...v].sort(() => Math.random() - 0.5))); setDone([]); setPassed(0); setClaimed(false); setReferralCreditsToday(0); setReferralToday(0); if (authed) void assignTasks(); };
   useEffect(() => { const check = () => { if (dayRef.current && dayRef.current !== new Date().toISOString().slice(0, 10)) rollDay(); }; const timer = setInterval(check, 1000); window.addEventListener('focus', check); return () => { clearInterval(timer); window.removeEventListener('focus', check); }; }, [tier]);
-  return { balance, profile, setProfile, tier, boughtTier, lifetimeTasks, buyTier, campaigns, done, entries, completeTask, claimDaily, pendingReward, claimed, passed, withdraw, withdrawable, minWithdrawal, hasWithdrawn, quotaDone, referralToday, addCampaign, onboarded, setOnboarded, welcomeClaimed, claimWelcome, claimingWelcome, coinSplash, streak, friends, advanceReferral, referralCreditsToday, referralCapReached, rollDay, dailyLimit, dailyReward: batch.reward, batchVersion, authed, hydrated, assignTasks, payoutsDone, weekEarned, claimTick, referralVault, transferReferral };
+  return { balance, profile, setProfile, tier, boughtTier, lifetimeTasks, videoCoins, campaigns, done, entries, completeTask, claimDaily, pendingReward, claimed, passed, withdraw, withdrawable, minWithdrawal, hasWithdrawn, quotaDone, referralToday, addCampaign, onboarded, setOnboarded, welcomeClaimed, claimWelcome, claimingWelcome, coinSplash, welcomeTick, streak, friends, advanceReferral, referralCreditsToday, referralCapReached, rollDay, dailyLimit, dailyReward: batch.reward, batchVersion, authed, hydrated, assignTasks, payoutsDone, weekEarned, claimTick, referralVault, transferReferral };
 }
 type StoreValue = ReturnType<typeof useStore>;
 /** Kept on globalThis so hot reloads reuse one context instead of splitting provider and consumers. */

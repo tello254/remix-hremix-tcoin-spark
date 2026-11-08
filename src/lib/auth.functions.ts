@@ -33,7 +33,7 @@ export const checkAvailability = createServerFn({ method: 'POST' })
 
 /** Creates the phone-identity account (no email, no Google, no SMS). */
 export const signUpUser = createServerFn({ method: 'POST' })
-  .inputValidator((d: unknown) => z.object({ username: z.string().trim().toLowerCase(), phone: z.string(), pin: z.string() }).parse(d))
+  .inputValidator((d: unknown) => z.object({ username: z.string().trim().toLowerCase(), phone: z.string(), pin: z.string(), referralCode: z.string().optional().default('') }).parse(d))
   .handler(async ({ data }) => {
     const username = data.username.toLowerCase();
     const phone = normalizePhone(data.phone);
@@ -66,6 +66,32 @@ export const signUpUser = createServerFn({ method: 'POST' })
       if (msg.includes('phone')) return { ok: false as const, error: 'phone_taken' };
       return { ok: false as const, error: 'username_taken' };
     }
+
+    // Referral link: resolve the code to an upline and record the (1-level) referral row.
+    const rawCode = (data.referralCode || '').trim();
+    if (rawCode) {
+      let code = rawCode;
+      if (/^tc[-_]/i.test(code)) code = code.slice(3);
+      code = code.trim().replace(/^[-_]/, '').toLowerCase();
+      if (code && code !== username) {
+        // Case-insensitive exact match; LIKE wildcards are escaped so usernames with '_' resolve literally.
+        const esc = code.replace(/[\\%_]/g, m => '\\' + m);
+        const { data: refRows } = await supabaseAdmin.from('profiles').select('id, username').ilike('username', esc).order('created_at', { ascending: true }).limit(1);
+        const refProfile = refRows?.[0];
+        if (refProfile?.id && refProfile.id !== created.user.id) {
+          const { error: refErr } = await supabaseAdmin.from('referrals').insert({
+            referrer_id: refProfile.id,
+            referee_id: created.user.id,
+            referral_code: rawCode,
+          });
+          if (refErr && !/duplicate|unique/i.test(refErr.message)) {
+            // non-fatal: the account is already created; just log via console
+            console.error('referral insert failed:', refErr.message);
+          }
+        }
+      }
+    }
+
     return { ok: true as const };
   });
 

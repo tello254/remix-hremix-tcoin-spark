@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { Link } from '@tanstack/react-router';
 import { useServerFn } from '@tanstack/react-start';
 import { ArrowRight, ArrowUpRight, Check, Clock3, Gift, Loader2, Megaphone, Play, Search, ShieldCheck, Target, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -8,7 +9,7 @@ import { useTcoins, type Campaign, type Platform } from './state';
 import { campaignSchema, campaignSlots, profileSchema } from '@/lib/rewards';
 import { searchAccounts, verifyTask, videoSeconds } from '@/lib/social.functions';
 import { createCampaign } from '@/lib/creator.functions';
-import { supabase } from '@/lib/supabase';
+import { authUser, supabase } from '@/lib/supabase';
 import { toast } from 'sonner';
 import coinImage from '@/assets/tcoins.png';
 
@@ -31,7 +32,7 @@ function HandlePicker({ platform, value, onChange, name }: { platform: 'YouTube'
         let decorated: (Account & { taken?: boolean })[] = r.map(a => ({ ...a }));
         if (r.length) {
           // fn_handle_taken: security-definer pre-check (own handles never block re-adding)
-          const { data: { user } } = await supabase.auth.getUser();
+          const user = await authUser();
           const marks = await Promise.all(r.map(async a => ((await supabase.rpc('fn_handle_taken', { p_platform: platform.toLowerCase(), p_handle: a.handle, p_owner: user?.id ?? null })).data as boolean) === true));
           decorated = r.map((a, i) => ({ ...a, taken: marks[i] }));
         }
@@ -56,7 +57,7 @@ function HandlePicker({ platform, value, onChange, name }: { platform: 'YouTube'
   const add = async (a: Account & { taken?: boolean }) => {
     // belt & braces: even if the dropdown metadata missed it, verify owner-wise before accepting
     if (!a.taken) {
-      const { data: { user } } = await supabase.auth.getUser();
+      const user = await authUser();
       const { data: takenNow } = await supabase.rpc('fn_handle_taken', { p_platform: platform.toLowerCase(), p_handle: a.handle, p_owner: user?.id ?? null });
       if (takenNow === true) { refuse(); return; }
     }
@@ -82,8 +83,10 @@ export function ProfileForm({ close }: { close: () => void }) {
   // Handles are PERSISTED in the DB (social_handles) against the user — not just this device.
   const persist = async (p: (typeof profileSchema)['_type']) => {
     setBusy(true); setError('');
+    // display-name rule: the saved name always reads capitalised — 'janes' becomes 'Janes' on every screen
+    if (p.name.trim()) p = { ...p, name: p.name.trim().charAt(0).toUpperCase() + p.name.trim().slice(1) };
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      const user = await authUser();
       if (user) {
         const { data: curRows } = await supabase.from('social_handles').select('id, platform, handle').eq('user_id', user.id);
         const cur = curRows ?? [];
@@ -109,6 +112,9 @@ export function ProfileForm({ close }: { close: () => void }) {
           }
         }
         await supabase.from('profiles').update({ username: p.name.trim() }).eq('id', user.id); // non-critical
+        // A freshly-linked handle un-locks videos TODAY, not only tomorrow: rerun the batch
+        // engine so an open day grows upward to the new eligibility (server-guarded, idempotent).
+        if (adds.length) void s.assignTasks();
       }
       s.setProfile(p); s.setOnboarded(true); close();
     } catch (err) { setBusy(false); return setError(`Couldn't save: ${String((err as Error)?.message ?? err).slice(0, 120)}`); }
@@ -138,7 +144,7 @@ export function ProfileForm({ close }: { close: () => void }) {
         <Button type="button" variant="outline" size="sm" onClick={() => setWarn(null)}>Connect all first</Button>
         <Button type="button" variant="outline" size="sm" onClick={() => { const result = profileSchema.safeParse(form); if (result.success) persist(result.data); }}>Save anyway — top up later</Button>
       </div>
-      <small className="muted">You can connect the remaining accounts any time. It applies from your next daily batch.</small>
+      <small className="muted">You can connect the remaining accounts any time. A newly linked platform extends the current day while it’s still open — finished batches move to tomorrow.</small>
     </div>}
     <form className="stack-form" onSubmit={save}>
       <label className="form-label">Your name<input required value={form.name} maxLength={60} onChange={e => setForm(v => ({ ...v, name: e.target.value }))}/></label>
@@ -147,7 +153,11 @@ export function ProfileForm({ close }: { close: () => void }) {
       <HandlePicker platform="TikTok" name={form.name} value={form.tiktok} onChange={tiktok => setForm(v => ({ ...v, tiktok }))}/>
       <HandlePicker platform="Instagram" name={form.name} value={form.instagram} onChange={instagram => setForm(v => ({ ...v, instagram }))}/>
       {error && <p className="form-error" role="alert">{error}</p>}<Button type="submit" disabled={busy}>{busy ? <Loader2 className="spin"/> : <>Save profile <Check/></>}</Button>
-    </form></>;
+    </form>
+    <footer className="profile-form-footer">
+      <span className="muted">Creator tools</span>
+      <Link to="/creator" onClick={() => close()} className="profile-creator-link"><Megaphone size={14}/> Creator studio <ArrowUpRight size={13}/></Link>
+    </footer></>;
 }
 
 export function CampaignForm({ close }: { close: () => void }) {
@@ -160,7 +170,7 @@ export function CampaignForm({ close }: { close: () => void }) {
       setError(''); setBusy(true);
       if (s.authed) {
         // Real launch: a live row in `campaigns` → enters every signed-in user's task pool.
-        const { data: { user } } = await supabase.auth.getUser();
+        const user = await authUser();
         const r = await createFn({ data: { ...result.data, accessCode: result.data.accessCode.toUpperCase(), creatorName: s.profile.name, creatorId: user?.id, adminCode: typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('tc_studio_code') ?? '' : '' } });
         setBusy(false);
         if (r.ok) { s.addCampaign(r.campaign); toast.success('Campaign is live — it’s in the task pool now.'); }
@@ -263,7 +273,7 @@ export function TaskDialog({ task, close }: { task: Campaign | null; close: () =
     lock.current = true; setError('');
     if (s.authed) {
       try {
-        const { data: { user } } = await supabase.auth.getUser();
+        const user = await authUser();
         if (user) {
           const { data: j } = await supabase.rpc('fn_complete_task', { p_user: user.id, p_campaign: task.id, p_platform: task.platform.toLowerCase(), p_handle: handles[0] ?? '', p_comment: quote });
           const r = j as { ok?: boolean; error?: string } | null;
@@ -290,7 +300,7 @@ export function TaskDialog({ task, close }: { task: Campaign | null; close: () =
       <progress value={doneCount} max={s.dailyLimit}/>
       <p>{doneCount >= s.dailyLimit ? `Daily quota complete — collect your ${s.pendingReward} Tcoins from your wallet.` : `Finish ${s.dailyLimit - doneCount} more to unlock your daily reward.`}</p>
       <Button onClick={close}>Keep the good going <ArrowRight/></Button></div>
-    : <><div className="task-dialog-preview"><img src={task.thumbnail} alt={task.title}/><div><Mark platform={task.platform}/><h3>{task.title}</h3><p>{task.creator}</p></div></div>
+    : <><div className="task-dialog-preview">{task.thumbnail ? <img src={task.thumbnail} alt={task.title}/> : <div className="thumb-none"><Mark platform={task.platform}/></div>}<div><Mark platform={task.platform}/><h3>{task.title}</h3><p>{task.creator}</p></div></div>
       <p className="task-instruction"><Clock3 size={14}/> {task.instruction}</p>
       <Button asChild onClick={() => { void openVideo(); }}><a href={task.url} target="_blank" rel="noopener noreferrer">{phase === 'expired' ? 'Open the video again' : watchEnd ? 'Reopen video' : 'Open the video'} <ArrowUpRight/></a></Button>
       <div className="timer-state"><Clock3/><strong>{phase === 'watching' ? mmss(watchLeft) : phase === 'ready' ? mmss(readyLeft) : phase === 'expired' ? 'Closed' : 'Open first'}</strong><span>{phase === 'watching' ? 'elapsing until the access code opens' : phase === 'ready' ? 'elapsing until the access code window closes' : phase === 'expired' ? 'Window closed — open the video again' : 'Opening the video starts the required viewing time'}</span></div>

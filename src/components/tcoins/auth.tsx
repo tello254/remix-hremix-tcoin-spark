@@ -10,6 +10,15 @@ import { searchAccounts } from '@/lib/social.functions';
 import coinImage from '@/assets/tcoins.png';
 
 /**
+ * The ONLY SIGNED_IN event the app redirects on is one just triggered by an explicit
+ * login/signup/forgot-verify submit in this screen. Supabase re-emits SIGNED_IN for
+ * session restores, cross-tab syncs and cookie echoes — reacting to those would yank
+ * the user off whatever page they were on (e.g. the creator studio) to the homepage.
+ */
+let redirectOnSignIn = false;
+const passSignInRedirect = () => { redirectOnSignIn = true; };
+
+/**
  * Auth gate — the ONLY doors to the app. No session → signup / login / forgot password.
  * No SMS provider anywhere (Cost = KSh 0): signup proves the phone via two forced
  * full-screen confirmations; every cashout is bound to that same locked number.
@@ -23,7 +32,9 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const started = useRef(false);
   useEffect(() => supabase.auth.onAuthStateChange((e, sess) => {
     if (e === 'SIGNED_OUT') { started.current = false; setTasking(false); }
-    if (e === 'SIGNED_IN' && sess?.user) void navigate({ to: '/' });
+    if (e === 'SIGNED_IN' && sess?.user) {
+      if (redirectOnSignIn) { redirectOnSignIn = false; void navigate({ to: '/' }); }
+    }
     setSession(sess?.user?.id ?? null);
   }).data.subscription.unsubscribe, [navigate]);
   useEffect(() => {
@@ -112,6 +123,7 @@ function SignupScreen() {
   const [phone, setPhone] = useState('');
   const [pin, setPin] = useState('');
   const [pin2, setPin2] = useState('');
+  const [refCode, setRefCode] = useState('');
   const [avail, setAvail] = useState<'idle' | 'ok' | 'taken'>('idle');
   const [phoneAvail, setPhoneAvail] = useState<'idle' | 'ok' | 'taken'>('idle');
   const [warn, setWarn] = useState<0 | 1 | 2>(0);          // 0 done · 1 first overlay · 2 second
@@ -121,6 +133,7 @@ function SignupScreen() {
   const nameOk = isUsername(username);
   const phoneOk = isSafaricom(phone);
   const valid = nameOk && avail === 'ok' && phoneOk && phoneAvail === 'ok' && warningsDone && pin.length === PIN_LENGTH && pin2 === pin;
+  useEffect(() => { try { const r = new URLSearchParams(window.location.search).get('ref'); if (r) setRefCode(r); } catch { /* ignore */ } }, []);
 
   useEffect(() => {
     const v = username.trim().toLowerCase();
@@ -152,8 +165,9 @@ function SignupScreen() {
   const signUp = async () => {
     if (!valid || busy) return;
     setBusy(true); setError('');
-    const r = await signUpUser({ data: { username, phone, pin } });
+    const r = await signUpUser({ data: { username, phone, pin, referralCode: refCode } });
     if (!r.ok) { setBusy(false); setError(FRIENDLY[r.error] || r.error); return; }
+    passSignInRedirect(); // a signup that just signed in is a real login — this redirect is ours
     const { error: e } = await supabase.auth.signInWithPassword({ phone: normalizePhone(phone), password: pin });
     if (e) { setBusy(false); setError('Account created, but sign-in failed. Try logging in.'); return; }
     setBusy(false); // session event swaps us to the dashboard + task assignment
@@ -178,6 +192,7 @@ function SignupScreen() {
         {pin2 && pin2 === pin && <div className="pin-ok"><Check size={14} /></div>}
       </>}
     {pin2 && pin2 !== pin && <p className="form-error">PINs do not match.</p>}
+    {refCode && <p className="auth-hint text-primary"><Check size={12} /> Referred by {refCode.toUpperCase()}</p>}
     {error && <p className="form-error" role="alert">{error}</p>}
     <Button type="submit" disabled={!valid || busy} className="auth-cta">{busy ? <Loader2 className="spin" size={16} /> : <>Create account & start earning <ArrowRight size={15} /></>}</Button>
 
@@ -198,6 +213,7 @@ function LoginScreen({ toForgot }: { toForgot: () => void }) {
   const go = async () => {
     if (busy || !isSafaricom(phone) || pin.length !== PIN_LENGTH) return;
     setBusy(true); setError('');
+    passSignInRedirect(); // a login submit is a real login — this redirect is ours
     const { error: e } = await supabase.auth.signInWithPassword({ phone: normalizePhone(phone), password: pin });
     setBusy(false);
     if (e) setError('Wrong number or PIN.');
@@ -256,6 +272,7 @@ function ForgotScreen({ done }: { done: () => void }) {
     } else {
       const r = await forgotReset({ data: { step: 3, phone, username, platform, handle, pin } });
       if (!r.ok) { setBusy(false); setError('Reset failed — verify the details and try again.'); return; }
+      passSignInRedirect(); // an authenticated reset signs the user in — this redirect is ours
       await supabase.auth.signInWithPassword({ phone: normalizePhone(phone), password: pin });
       setBusy(false);
       done();  // password IS reset; if sign-in failed the login screen takes over

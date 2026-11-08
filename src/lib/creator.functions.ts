@@ -26,12 +26,29 @@ export type CampaignRow = {
   creator_name: string;
 };
 
+/**
+ * Zero-cost cover image from the video link itself (no API keys):
+ *   YouTube  → i.ytimg.com frame of the video ID (covers watch?v=, /shorts/, youtu.be links)
+ *   Instagram → the /p/<code>/media/ frame from the post shortcode
+ * TikTok needs its public oEmbed lookup — done at launch time (createCampaign), not here.
+ */
+export const deriveThumbnail = (url: string, platform: string): string => {
+  const u = url.trim();
+  if (platform === 'YouTube') {
+    const id = u.match(/\/shorts\/([\w-]{11})/i)?.[1] ?? u.match(/[?&]v=([\w-]{11})/i)?.[1] ?? u.match(/youtu\.be\/([\w-]{11})/i)?.[1];
+    return id ? `https://i.ytimg.com/vi/${id}/hqdefault.jpg` : '';
+  }
+  // Instagram deliberately derives nothing: the /p/<code>/media endpoint redirects to the
+  // login wall in browsers, so it renders as a broken image. Those cards show the same
+  // clean platform tile as TikTok (creator-provided thumbnails remain the one real cover).
+  return '';
+};
+
 /** DB row → the Campaign shape the UI consumes. */
 const platformFromDb = (db: string): Platform => db.toLowerCase() === 'tiktok' ? 'TikTok' : db.toLowerCase() === 'instagram' ? 'Instagram' : 'YouTube';
 export const rowToCampaign = (row: CampaignRow): Campaign => {
   const platform = platformFromDb(row.platform);
-  const ytId = platform === 'YouTube' ? row.url.match(/[?&]v=([\w-]{11})/)?.[1] : undefined;
-  const thumb = row.thumbnail || (ytId ? `https://i.ytimg.com/vi/${ytId}/hqdefault.jpg` : '');
+  const thumb = row.thumbnail || deriveThumbnail(row.url, platform);
   return {
     id: row.id,
     title: row.title,
@@ -69,11 +86,22 @@ export const createCampaign = createServerFn({ method: 'POST' })
   .handler(async ({ data }) => {
     // Studio is admin-only: the code is enforced HERE (server), not just in the UI.
     if (!adminOk(data.adminCode)) return { ok: false as const, error: 'unauthorized_studio' };
+    // A campaign launched without a cover image still gets one, derived from the
+    // video link itself (see deriveThumbnail). TikTok links (which are often short
+    // vm.tiktok.com links) resolve through TikTok's public oEmbed — best-effort,
+    // silently skipped when the lookup fails or is slow.
+    let thumbnail = data.thumbnail || deriveThumbnail(data.url, data.platform);
+    if (!thumbnail && data.platform === 'TikTok') {
+      try {
+        const oe = await fetch(`https://www.tiktok.com/oembed?url=${encodeURIComponent(data.url)}`, { signal: AbortSignal.timeout(4000) });
+        thumbnail = ((await oe.json()) as { thumbnail_url?: string }).thumbnail_url || '';
+      } catch { /* leave blank — display falls back and nothing blocks the launch */ }
+    }
     const { data: row, error } = await supabaseAdmin.from('campaigns').insert({
       title: data.title,
       url: data.url,
       platform: data.platform.toLowerCase(),
-      thumbnail: data.thumbnail || '',
+      thumbnail,
       budget_ksh: data.budget,
       payout_ksh: data.payout,
       access_code: data.accessCode,
@@ -84,6 +112,24 @@ export const createCampaign = createServerFn({ method: 'POST' })
     }).select().single();
     if (error || !row) return { ok: false as const, error: error?.message ?? 'insert_failed' };
     return { ok: true as const, campaign: rowToCampaign(row as CampaignRow) };
+  });
+
+/**
+ * Remove a campaign from the studio. Only rows with ZERO completions can be deleted:
+ * task_completions cascade with the row, so removing a used campaign would erase the
+ * "never offer twice" history and let people re-earn on a re-launched URL (double pay).
+ * Those are paused instead. Deletion is real and instant — the pool loses the video mid-day.
+ */
+export const deleteCampaign = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) => z.object({ adminCode: z.string().min(1).max(10), id: z.string().uuid() }).parse(d))
+  .handler(async ({ data }) => {
+    if (!adminOk(data.adminCode)) return { ok: false as const, error: 'unauthorized_studio' as const };
+    const { data: cur } = await supabaseAdmin.from('campaigns').select('title, completed').eq('id', data.id).single();
+    if (!cur) return { ok: false as const, error: 'not_found' as const };
+    if (Number(cur.completed) > 0) return { ok: false as const, error: `has_completions(${cur.completed})` as const };
+    const { error } = await supabaseAdmin.from('campaigns').delete().eq('id', data.id);
+    if (error) return { ok: false as const, error: error.message };
+    return { ok: true as const, title: cur.title };
   });
 
 /** Control center: list EVERY campaign (active, paused, or exhausted) — not just the user-facing pool. */

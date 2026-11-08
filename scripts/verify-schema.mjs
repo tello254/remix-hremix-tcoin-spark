@@ -47,7 +47,7 @@ expect('trigger: profile created, phone = username, locked',
 
 // campaign + linked handles FIRST — batch generation is linked-platform aware (fn_eligible_pool):
 // missing platforms simply leave their videos out of the pool; handles are one-owner global assets
-const { rows: [camp] } = await c.query(`insert into campaigns (title, url, platform, budget_ksh, payout_ksh, access_code) values ('E2E Video','https://youtu.be/abc12345678','youtube',1000,2,'E2E24') returning id, slots`);
+const { rows: [camp] } = await c.query(`insert into campaigns (title, url, platform, budget_ksh, payout_ksh, access_code) values ('E2E Video','https://youtu.be/abc12345678','e2etest',1000,2,'E2E24') returning id, slots`);
 expect('campaign slots derived', camp.slots === 500);
 const R = Math.random().toString(36).slice(2, 7);   // randomized so E2E handles can never collide with a real signup
 await c.query(`insert into social_handles (user_id, platform, handle) values ($1,'youtube','@earto${R}'),($1,'youtube','@nonexist${R}'),($1,'tiktok','@earto_tt${R}'),($1,'instagram','@earto_ig${R}')`, [A.id]);
@@ -178,7 +178,12 @@ expect('refund restores B to 100', q.rows[0].balance_after === 100);
 
 // views
 q = await c.query(`select * from v_badge_progress where user_id=$1`, [A.id]);
-expect('v_badge_progress works', q.rows.length === 1 && q.rows[0].tasks_to_next_badge === 59, `lifetime=${q.rows[0]?.lifetime_tasks} to_pro=${q.rows[0]?.tasks_to_next_badge}`);
+const bp = q.rows[0];
+const bpNext = bp ? (bp.video_coins < 1000 ? 1000 : bp.video_coins < 3400 ? 3400 : bp.video_coins) - bp.video_coins : null;
+expect('v_badge_progress works (tier yardstick = daily-batch Tcoins)',
+  q.rows.length === 1 && typeof bp.video_coins === 'number' && bp.coins_to_next_badge === bpNext
+  && ['pro', 'premium', 'max_tier'].includes(bp.next_badge_target),
+  `video_coins=${bp?.video_coins} to_next=${bp?.coins_to_next_badge} target=${bp?.next_badge_target}`);
 q = await c.query(`select count(*) n from pg_policies where schemaname='public'`);
 expect('RLS policies', q.rows[0].n >= 11);
 
@@ -198,9 +203,58 @@ expect('zero linked handles: honest empty day (0 videos / 0 reward)',
 resW = (await c.query(`select fn_claim_daily_batch($1)`, [D.id])).rows[0].fn_claim_daily_batch;
 expect('claiming an empty batch is refused', resW.ok === false && resW.error === 'nothing_to_claim', JSON.stringify(resW));
 
+// ============ live fair-share allocation: handles link AND videos leave mid-day ============
+const E = await mk(5);   // zero handles at mint time — the janes scenario
+let genE = (await c.query(`select fn_generate_batch($1)`, [E.id])).rows[0].fn_generate_batch;
+expect('E day minted with 0 handles: honest 0/0 batch', genE.ok === true && genE.video_count === 0 && genE.reward === 0, JSON.stringify(genE).slice(0, 90));
+await c.query(`insert into social_handles (user_id, platform, handle) values ($1,'youtube','@sameday${R}')`, [E.id]);
+const eligE = (await c.query(`select fn_eligible_pool($1) n`, [E.id])).rows[0].n;
+const vE = Math.min(5, eligE);                       // compared against the untouched day-1 formula
+genE = (await c.query(`select fn_generate_batch($1)`, [E.id])).rows[0].fn_generate_batch;
+expect('handle linked AFTER mint unlocks the SAME day (same row, same rules, never reset)',
+  genE.already_existed === true && genE.realigned === true && genE.video_count === vE
+  && genE.reward === Math.floor(75 * vE / 5) && genE.completed_tasks === 0 && genE.is_claimed === false,
+  `eligible=${eligE} videos=${genE.video_count} reward=${genE.reward}`);
+q = await c.query(`select count(*)::int n from daily_batches where user_id=$1 and date_utc = today_utc()`, [E.id]);
+expect('realignment reused the SAME daily_batches row (no reset/recreate)', q.rows[0].n === 1, `rows=${q.rows[0].n}`);
+const genE2 = (await c.query(`select fn_generate_batch($1)`, [E.id])).rows[0].fn_generate_batch;
+expect('realignment is idempotent: rerun with an unchanged pool is a no-op', genE2.realigned === false && genE2.video_count === vE);
+// extra eligible videos past the requirement never push beyond it: link ALL three platforms
+await c.query(`insert into social_handles (user_id, platform, handle) values ($1,'tiktok','@samedaytt${R}'),($1,'instagram','@samedayig${R}')`, [E.id]);
+const eligMore = (await c.query(`select fn_eligible_pool($1) n`, [E.id])).rows[0].n;
+const genE2b = (await c.query(`select fn_generate_batch($1)`, [E.id])).rows[0].fn_generate_batch;
+expect('eligible videos beyond the requirement stay capped at the allocation',
+  genE2b.video_count === Math.min(5, eligMore) && genE2b.video_count <= 5,
+  `eligible=${eligMore} videos=${genE2b.video_count}`);
+// eligibility shrunk mid-day (here: handles unlinked — the same arithmetic as a video leaving
+// the pool) re-allocates the open day the same day, reward scaled to the new count
+await c.query(`delete from social_handles where user_id = $1 and platform in ('tiktok','instagram')`, [E.id]);
+const eligAfter = (await c.query(`select fn_eligible_pool($1) n`, [E.id])).rows[0].n;
+const vE2 = Math.min(5, eligAfter);
+const genE2c = (await c.query(`select fn_generate_batch($1)`, [E.id])).rows[0].fn_generate_batch;
+expect('eligibility lost mid-day re-allocates the SAME day downward (proportional, same row)',
+  genE2c.realigned === true && genE2c.video_count === vE2 && genE2c.reward === Math.floor(75 * vE2 / 5),
+  `eligible=${eligAfter} videos=${genE2c.video_count} reward=${genE2c.reward}`);
+q = await c.query(`select count(*)::int n from daily_batches where user_id=$1 and date_utc = today_utc()`, [E.id]);
+expect('downward realignment still reused the SAME row', q.rows[0].n === 1, `rows=${q.rows[0].n}`);
+await c.query(`update daily_batches set is_claimed = true, claimed_at = now() where user_id=$1 and date_utc = today_utc()`, [E.id]);
+const genE3 = (await c.query(`select fn_generate_batch($1)`, [E.id])).rows[0].fn_generate_batch;
+expect('a claimed batch never re-opens, grows or shrinks', genE3.realigned === false && genE3.is_claimed === true && genE3.video_count === vE2);
+// platform isolation: only LINKED platforms ever count toward eligibility
+const poolAll = (await c.query(`select count(*)::int n from campaigns where active`)).rows[0].n;
+const poolYouTubeOnly = (await c.query(`select count(*)::int n from campaigns where active and platform = 'youtube'`)).rows[0].n;
+const eligE2 = (await c.query(`select fn_eligible_pool($1) n`, [E.id])).rows[0].n;
+expect('linked-platform isolation: unlinked platforms stay out of the pool',
+  eligE2 === poolYouTubeOnly && poolYouTubeOnly < poolAll, `linkedOnly=${eligE2} yt=${poolYouTubeOnly} all=${poolAll}`);
+// this suite's campaigns ride the unverifiable 'e2etest' platform — no real account can link it
+const poolTest = (await c.query(`select count(*)::int n from campaigns where active and platform = 'e2etest'`)).rows[0].n;
+const poolReal = (await c.query(`select count(*)::int n from campaigns where active and platform in ('youtube','tiktok','instagram')`)).rows[0].n;
+expect('E2E test campaigns are platform-isolated — visible to no real pool or batch',
+  poolTest >= 1 && poolReal + poolTest === poolAll && eligE2 === poolYouTubeOnly, `test=${poolTest} real=${poolReal} all=${poolAll}`);
+
 // cleanup
 await c.query(`delete from campaigns where id=$1`, [camp.id]);
-for (const uu of [A.id, B.id, C.id, D.id]) { try { await authApi('/auth/v1/admin/users/' + uu, 'DELETE'); } catch { /* already gone */ } }
+for (const uu of [A.id, B.id, C.id, D.id, E.id]) { try { await authApi('/auth/v1/admin/users/' + uu, 'DELETE'); } catch { /* already gone */ } }
 console.log(`\n${pass} passed, ${fail} failed`);
 await c.end();
 process.exit(fail ? 1 : 0);
