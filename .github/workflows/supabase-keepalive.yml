@@ -1,0 +1,63 @@
+# Keeps the free-tier Supabase project (efuenigsccernwzhswnp, eu-west-1) from
+# being paused for inactivity. Free projects pause after ~7 days without API
+# activity; this runs every ~5 days and inserts one row into keepalive_pings
+# using the project's publishable key (public by design; an RLS policy allows
+# anon inserts on that table only). If the insert fails, it falls back to a
+# read-only ping, which also counts as activity. No GitHub secrets required.
+#
+# NOTE: this repo's .env is gitignored (it holds the service role key), so the
+# public URL + publishable key are hardcoded here instead of read from .env.
+# If the project URL ever changes, update both .env and this file.
+name: Supabase keep-alive
+
+on:
+  schedule:
+    - cron: "43 8 */5 * *" # every 5 days (days 1,6,11,16,21,26 of each month), ~08:43 UTC
+  workflow_dispatch: # allow manual trigger from the Actions tab
+
+env:
+  SUPABASE_URL: https://efuenigsccernwzhswnp.supabase.co
+  SUPABASE_PUBLISHABLE_KEY: sb_publishable_bSTwFzUoUjzyFkKynt3SJA_CrQSBnkq
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Insert keepalive row
+        id: insert
+        run: |
+          code=$(curl -sS -o /dev/null -w "%{http_code}" -X POST \
+            "$SUPABASE_URL/rest/v1/keepalive_pings" \
+            -H "apikey: $SUPABASE_PUBLISHABLE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_PUBLISHABLE_KEY" \
+            -H "Content-Type: application/json" \
+            -H "Prefer: return=minimal" \
+            -d '{}')
+          echo "Keepalive insert responded with HTTP $code"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
+      - name: Ping Data API (read-only fallback)
+        if: steps.insert.outputs.code != '201'
+        run: |
+          code=$(curl -sS -o /dev/null -w "%{http_code}" \
+            "$SUPABASE_URL/rest/v1/profiles?select=id&limit=1" \
+            -H "apikey: $SUPABASE_PUBLISHABLE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_PUBLISHABLE_KEY")
+          echo "Data API responded with HTTP $code (insert fallback)"
+          # 200/2xx (or even 401/403) all mean the request reached the project
+          # and registered as activity. Only a network failure (000) is fatal.
+          if [ "$code" = "000" ]; then
+            echo "Request never reached Supabase" >&2
+            exit 1
+          fi
+
+      - name: Ping Auth health endpoint
+        run: |
+          code=$(curl -sS -o /dev/null -w "%{http_code}" \
+            "$SUPABASE_URL/auth/v1/health" \
+            -H "apikey: $SUPABASE_PUBLISHABLE_KEY")
+          echo "Auth health responded with HTTP $code"
+          if [ "$code" = "000" ]; then
+            echo "Request never reached Supabase" >&2
+            exit 1
+          fi
